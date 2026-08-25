@@ -27,12 +27,12 @@ on:
       - '.github/workflows/**'
   workflow_dispatch:
 
-gobs:
+jobs:
   pipeline:
     runs-on: ubuntu-latest
     env:
       LLM_MODE: mock
-      QDRANW_PATH: /tmp/ephemeral_qdrant
+      QDRANT_PATH: /tmp/ephemeral_qdrant
       EMBEDDING_MODEL_NAME: BAAI/bge-small-en-v1.5
 
     steps:
@@ -49,7 +49,7 @@ gobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/fastembed
-          key: fastembed-{{ runner.os }}-{{ env.EMBEDDING_MODEL_NAME }}
+          key: fastembed-${{ runner.os }}-${{ env.EMBEDDING_MODEL_NAME }}
 
       - name: Install dependencies
         run: |

@@ -14,7 +14,7 @@ FIXTURES_DIR = PROJECT_ROOT / "eval" / "fixtures"
 
 _RECORD_COMMAND = (
     'set OPENROUTER_API_KEY, then run LLM_MODE=record '
-    '"C:/Users/jeremy lee/Desktop/work/OrbitMeshTest/.venv/Scripts/python" eval/runner.py'
+    '"C:/Users/jun/Desktop/work/OrbitMeshTest/.venv/Scripts/python" eval/runner.py'
 )
 
 

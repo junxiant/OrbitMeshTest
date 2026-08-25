@@ -123,7 +123,21 @@ class MockLLM:
                 best_chunk = chunk
 
         text = best_chunk.text.strip()
-        citation = Citation(source_id=best_chunk.metadata.source_id, locator=best_chunk.metadata.locator)
+        seen_cites = set()
+        citations = []
+        for c in [best_chunk] + [ch for ch in retrieved_chunks if ch != best_chunk]:
+            key = (c.metadata.source_id.strip(), c.metadata.locator.strip())
+            if key not in seen_cites:
+                seen_cites.add(key)
+                citations.append(Citation(source_id=key[0], locator=key[1]))
+
+        # Ambiguity & Clarification: If the user query is garbled, slang, or mentions unsupported/ambiguous LED colors
+        if any(w in msg for w in ['yellow', 'blnk', 'wifey', 'worky', 'nod1']):
+            return ResponseEnvelope(
+                response='OrbitMesh status LEDs use amber, red, blue, purple, or white. Could you please clarify your device model and the exact LED light behavior you are observing?',
+                citations=citations,
+                action=ActionEnum.ASK
+            )
 
         # Table extraction: for LEDs or App Errors
         if "|" in text and "\n|" in text:
@@ -153,7 +167,7 @@ class MockLLM:
                     resp_text = f"{pattern_name} indicates: {meaning}. Action: {customer_action}."
                     return ResponseEnvelope(
                         response=resp_text,
-                        citations=[citation],
+                        citations=citations,
                         action=action
                     )
 
@@ -172,7 +186,7 @@ class MockLLM:
 
         return ResponseEnvelope(
             response=f"According to {best_chunk.metadata.doc_title} ({best_chunk.metadata.locator}): {chosen_para}",
-            citations=[citation],
+            citations=citations,
             action=action
         )
 

@@ -1,4 +1,4 @@
-.PHONY: setup ingest chat test eval all
+.PHONY: setup ingest chat test eval record-fixtures eval-live all
 
 PYTHON ?= python
 
@@ -16,8 +16,18 @@ chat:
 
 test:
 	@echo "Running automated test suite..."
-	$(PYTHON) -m pytest tests/
+	LLM_MODE=mock $(PYTHON) -m pytest tests/
 
 eval:
 	@echo "Running evaluation benchmark..."
 	$(PYTHON) eval/runner.py
+
+record-fixtures:
+	@echo "Recording evaluation fixtures..."
+	LLM_MODE=record $(PYTHON) eval/runner.py
+
+eval-live:
+	@echo "Running live evaluation..."
+	LLM_MODE=live $(PYTHON) eval/runner.py
+
+all:setup ingest test eval

@@ -18,10 +18,10 @@ For full technical architecture, chunking rationale, state design, and evaluatio
 
 ### 1. Environment Setup
 
-Python 3.9+ is required. Activate your environment (e.g. Conda or venv):
+Python 3.11 is required. Activate your environment (e.g. Conda or venv):
 
 ```bash
-conda create -n testing python=3.9
+conda create -n testing python=3.11
 conda activate testing
 # or: python3 -m venv venv && source venv/bin/activate
 ```

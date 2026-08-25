@@ -9,6 +9,7 @@ on:
       - 'tests/**'
       - 'scripts/**'
       - 'requirements.txt'
+      - 'requirements-dev.txt'
       - 'Makefile'
       - '.github/workflows/**'
   pull_request:
@@ -19,6 +20,7 @@ on:
       - 'tests/**'
       - 'scripts/**'
       - 'requirements.txt'
+      - 'requirements-dev.txt'
       - 'Makefile'
       - '.github/workflows/**'
   workflow_dispatch:
@@ -33,7 +35,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@0v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -41,10 +43,21 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
+      - name: Cache FastEmbed models
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/fastembed
+          key: fastembed-{{ runner.os }}-{{ env.EMBEDDING_MODEL_NAME }}
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           make setup
+          python -m pip install -r requirements-dev.txt
+
+      - name: Lint with ruff
+        run: |
+          ruff check .
 
       - name: Make scripts executable
         run: |

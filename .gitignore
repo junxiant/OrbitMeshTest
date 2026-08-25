@@ -1,0 +1,33 @@
+.DS_Store
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+coverage/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# JavaScript
+node_modules/
+
+# Local databases, vector state, and generated output
+*.db
+data/sessions.db
+data/qdrant/
+qdrant_storage/
+eval_results/
+logs/
+*.log
+
+# Editors
+.idea/
+.vscode/
+plan.md
+*plan.md

@@ -1,0 +1,9 @@
+.git
+.github
+.env*
+.DS_Store
+qdrant_storage
+data/qdrant
+private_evals
+eval_results
+

@@ -1,0 +1,11 @@
+# Runtime + test dependencies, pinned for reproducible builds.
+# Versions are the exact set the project was developed and evaluated against
+pydantic==2.13.4
+fastembed==0.8.0
+qdrant-client==1.19.0
+rich==15.0.0
+pytest==9.1.1
+python-dotenv==1.2.3
+openai==3.3.1
+tabulate==0.10.0
+numpy==2.4.6

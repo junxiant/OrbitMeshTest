@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    paths:
+      - 'corpus/**'
+      - 'src/**'
+      - 'eval/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'requirements.txt'
+      - 'Makefile'
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - 'corpus/**'
+      - 'src/**'
+      - 'eval/**'
+      - 'tests/**'
+      - 'scripts/**'
+      - 'requirements.txt'
+      - 'Makefile'
+      - '.github/workflows/**'
+  workflow_dispatch:
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    env:
+      LLM_MODE: mock
+      QDRANT_PATH: /tmp/ephemeral_qdrant
+      EMBEDDING_MODEL_NAME: BAAI/bge-small-en-v1.5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          make setup
+
+      - name: Make scripts executable
+        run: |
+          chmod +x scripts/*.sh
+
+      - name: Run ephemeral corpus ingestion
+        run: |
+          make ingest
+
+      - name: Verify CLI transport contract
+        run: |
+          python scripts/check_contract.py
+
+      - name: Run test suite
+        run: |
+          make test
+
+      - name: Run evaluation suite (mock mode)
+        run: |
+          make eval

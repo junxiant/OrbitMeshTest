@@ -40,10 +40,8 @@ LLM_MODE = _raw_llm_mode
 OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'nvidia/nemotron-3.5-lightning:free')
 OPENROUTER_FALLBACK_MODELS = [
     OPENROUTER_MODEL,
-    'stealth/ox-alpha',
     'google/gemma-4-26b-a4b-it:free',
     'google/gemma-4-31b-it:free',
-    'meta-llama/llama-3.3-70b-instruct',
 ]
 
 LLM_RATE_LIMIT_DELAY = float(os.getenv('LLM_RATE_LIMIT_DELAY', '1.0'))

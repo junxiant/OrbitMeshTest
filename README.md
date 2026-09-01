@@ -119,7 +119,7 @@ make test
 ```
 
 ### 3. Run Benchmark Evaluation
-Runs the 16-case benchmark evaluation suite and outputs quantified quality metrics:
+Runs the 20-case benchmark evaluation suite and outputs quantified quality metrics:
 
 ```bash
 make eval

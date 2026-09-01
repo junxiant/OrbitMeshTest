@@ -12,7 +12,8 @@ from src.core.logging import logger
 
 _UNSET = object()
 
-
+# To store / retrieve / update session states used for memory
+# Check issue on attempted_steps and reported_issue
 class SessionStateManager:
     _db_path: Path = SQLITE_DB_PATH
     _initialized: bool = False
@@ -99,6 +100,7 @@ class SessionStateManager:
         session.dialogue_window.append(user_msg)
         session.dialogue_window.append(asst_msg)
 
+        # Last n turns * 2 = total messages
         max_msgs = max_window_turns * 2
         if len(session.dialogue_window) > max_msgs:
             session.dialogue_window = session.dialogue_window[-max_msgs:]
@@ -153,7 +155,7 @@ class SessionStateManager:
         return {
             "identified_model": state.identified_model or "Unknown (Needs identification)",
             "attempted_steps": state.attempted_steps,
-            "pending_confirmation": state.pending_confirmation,
+            "pending_confirmation": state.pending_confirmation, # Factory reset
             "recent_messages": [msg.model_dump() for msg in state.dialogue_window],
         }
 

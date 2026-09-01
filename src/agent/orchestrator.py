@@ -19,20 +19,22 @@ class OrbitMeshOrchestrator:
         self.last_retrieved_chunks = []
 
     def process_turn(self, session_id: str, user_message: str) -> ResponseEnvelope:
+        # 1. Get existing or create new sess
         session = self.session_manager.get_or_create(session_id)
         session.turns_count += 1
 
+        # 2. Input Guardrail check
         isolated_msg, is_safe, clean_msg = InputGuardrail.sanitize_and_inspect(user_message)
         msg_lower = clean_msg.lower().strip()
 
-        # Hardware hazard check
+        # 3. Do Hardware hazard check
         hazard_envelope = OutputGuardrail.check_hardware_safety(clean_msg, "")
         if hazard_envelope:
             session.is_escalated = True
             self.session_manager.record_turn(session, clean_msg, hazard_envelope.response, step_executed="hazard_escalation")
             return hazard_envelope
 
-        # Prompt injection containment
+        # 4. Prompt injection containment
         if not is_safe:
             injection_envelope = ResponseEnvelope(
                 response="I can only assist with official OrbitMesh device troubleshooting and network configuration. How can I help with your OrbitMesh system?",
@@ -42,6 +44,7 @@ class OrbitMeshOrchestrator:
             self.session_manager.record_turn(session, clean_msg, injection_envelope.response)
             return injection_envelope
 
+        # 5. Model identification
         # Update model identification slot if detected via word-boundary token matching
         if re.search(r"\b(r5\s*pro|n5\s*pro|pro\s+gateway|pro\s+node|orbitmesh\s+pro)\b", msg_lower):
             session.identified_model = "OrbitMesh Pro"
@@ -53,7 +56,7 @@ class OrbitMeshOrchestrator:
         is_yes = bool(re.search(r"\b(yes|yep|yeah|proceed|confirm|confirmed|sure|ok|okay|go\s+ahead|do\s+it)\b", msg_lower))
         is_no = bool(re.search(r"\b(no|cancel|stop|abort|don'?t|do\s+not|nevermind|never\s+mind|skip)\b", msg_lower))
 
-        # Factory reset confirmation only fires when a prior turn set pending_confirmation
+        # 6. Check Factory reset confirmation only fires when a prior turn set pending_confirmation
         if session.pending_confirmation == "factory_reset":
             if is_no and not is_yes:
                 session.pending_confirmation = None
@@ -90,6 +93,7 @@ class OrbitMeshOrchestrator:
             else:
                 session.pending_confirmation = None
 
+        # 7. Start RAG Retrieval based on model
         model_str = session.identified_model or ""
         product_line_filter = "Pro" if "pro" in model_str.lower() else ("Standard" if any(x in model_str.lower() for x in ["r1", "n1"]) else None)
 
@@ -102,8 +106,10 @@ class OrbitMeshOrchestrator:
         )
 
         self.last_retrieved_chunks = retrieved_chunks
+        # 8. Package the output
         proposed_envelope = self.llm.complete(clean_msg, session, retrieved_chunks)
 
+        # 9. Check for Output Guardrail
         hardware_check = OutputGuardrail.check_hardware_safety(clean_msg, proposed_envelope.response)
         if hardware_check:
             final_envelope = hardware_check
@@ -118,12 +124,13 @@ class OrbitMeshOrchestrator:
             # Sensitive info solicitation check
             final_envelope = OutputGuardrail.check_sensitive_info_solicitation(final_envelope)
 
-        # Validate citations against grounded corpus index
+        # 10. Validate citations against grounded corpus index
         final_envelope.citations = OutputGuardrail.validate_and_repair_citations(
             final_envelope.citations,
             retrieved_chunks
         )
-
+    
+        # 11. Update the session with the final response
         step_executed = None
         if final_envelope.action == ActionEnum.INSTRUCT:
             resp_l = final_envelope.response.lower()

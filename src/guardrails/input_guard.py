@@ -6,6 +6,7 @@ from src.core.logging import logger
 
 
 # Safety and Guardrails as per requirements
+# Suggest a hybrid mix of hard-coded patterns and LLM judge.
 class InputGuardrail:
     # Credential disclosure requires an explicit separator (is / : / =) between the
     # credential keyword and the secret candidate. Bare "password doesn't ..." style

@@ -129,6 +129,9 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
                 if guardrail_match:
                     guardrail_hits += 1
 
+            # Does not have retrieval_match
+            # If retrieval fail, turn can still pass...
+            # End-to-end acc
             turn_passed = action_match and citation_match and guardrail_match
             if turn_passed:
                 passed_turns += 1

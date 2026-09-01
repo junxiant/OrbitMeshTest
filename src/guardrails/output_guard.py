@@ -188,6 +188,7 @@ class OutputGuardrail:
             cls._corpus_sections = sections
         return cls._corpus_sections
 
+    # Retrieve at runtime from corpus
     @classmethod
     def get_section_text(cls, doc_id: str, locator: str) -> str:
         sections = cls.get_corpus_sections()
@@ -483,13 +484,17 @@ class OutputGuardrail:
         logger.info("Factory reset proposed or requested without confirmation. Intercepting with warning.")
         return cls._reset_warning_envelope()
 
+    # If document does not exist, no source_id, try to repair, if not drop it
+    # If document exist, but locator is missing, try to validate and repair, if not use the retrieved_chunks, else drop it
+    # If no citations, use the top retrieved chunk
+    # Might have an issue with eval since it returns the retrieved chunk due to fallback after failing repairs
     @classmethod
     def validate_and_repair_citations(
         cls,
         citations: List[Citation],
         retrieved_chunks: Optional[List[DocumentChunk]] = None
     ) -> List[Citation]:
-        index = cls.get_corpus_citation_index()
+        index = cls.get_corpus_citation_index() # Get index in memory map
         valid_citations: List[Citation] = []
         seen = set()
 

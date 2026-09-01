@@ -38,6 +38,7 @@ BM25_STOP_WORDS = frozenset({
 })
 
 
+# Keyword Ranking
 class BM25Index:
     """In-memory Okapi BM25 Index for lexical search over corpus chunks."""
     def __init__(
@@ -197,6 +198,16 @@ class HybridRetriever:
         between 0.00 and the in-domain min (4.45). A query is answered if
         EITHER track clears its floor; both floors are env-overridable
         (DENSE_SCORE_FLOOR / BM25_SCORE_FLOOR).
+
+        Take notes:
+        If corpus increases need to modify these values / recalculate.
+        Different Embedding models will also require a change in the dense score.
+
+        Scale 100x, move BM25Index and RRF to Qdrant server.
+        HybridRankFusion in qdrant-sdk can do this natively.
+
+        Also, run automated calibration.
+
         """
         total_count = self.indexer.count()
         if total_count == 0:
@@ -235,6 +246,7 @@ class HybridRetriever:
             must=must_conditions or None,
             must_not=[not_meta_condition()]
         )
+        # 3 x top_k documents
         limit = min(top_k * 3, max(total_count, 1))
 
         dense_points = []
@@ -262,6 +274,9 @@ class HybridRetriever:
         # 3. Abstention gate on raw per-track scores (before fusion, see docstring)
         best_dense = max((hit.score for hit in dense_points), default=0.0)
         best_bm25 = bm25_candidates[0][0] if bm25_candidates else 0.0
+        # The gating. RRF gets rank position, not quality of match. 
+        # RRF always returns a rank 1, might skew scores.
+        # Prevent hallucination
         if best_dense < DENSE_SCORE_FLOOR and best_bm25 < BM25_SCORE_FLOOR:
             logger.info(
                 f"Retriever abstained: best dense {best_dense:.3f} < {DENSE_SCORE_FLOOR} and "

@@ -54,6 +54,7 @@ LOG_LEVEL = os.getenv('LOG_LEVEL', 'INFO').upper()
 # in-domain best-dense-cosine min 0.687 / best-BM25 min 4.45; out-of-domain
 # best-dense max 0.573 / best-BM25 max 0.00. Full per-query probe table in
 # src/rag/retriever.py next to the gate.
+# Higher - More strict. Lower - More lenient.
 DENSE_SCORE_FLOOR = float(os.getenv('DENSE_SCORE_FLOOR', '0.62'))
 BM25_SCORE_FLOOR = float(os.getenv('BM25_SCORE_FLOOR', '2.5'))
 

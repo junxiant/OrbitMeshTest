@@ -22,7 +22,7 @@ ensure_dirs()
 app = FastAPI(
     title="OrbitMesh Support API",
     description="FastAPI backend service for OrbitMesh diagnostic orchestrator",
-    version="1.0.0",
+    version="0.0.1",
 )
 
 # CORS configuration
@@ -90,7 +90,7 @@ def health_check():
     return {
         "status": "ok",
         "service": "orbitmesh-backend",
-        "version": "1.0.0",
+        "version": "0.0.1",
     }
 
 

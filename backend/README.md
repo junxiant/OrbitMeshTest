@@ -40,6 +40,28 @@ You can also launch each service in its own terminal or script:
 
 ---
 
+### Web Dashboards & Database GUIs
+When Docker Compose is running (`docker compose up -d` or `./start_all.sh`), the following web dashboards are available:
+
+1. **Qdrant Vector Web Dashboard**:
+   - **URL**: `http://localhost:6333/dashboard`
+   - **Features**: Visual collection explorer for `orbitmesh_docs`, search and inspect chunk vector points, check payload metadata, and view real-time vector database metrics.
+
+2. **PostgreSQL Web Interface (Adminer)**:
+   - **URL**: `http://localhost:8080`
+   - **System**: Select `PostgreSQL`
+   - **Server**: `postgres` (or `localhost` if using an external tool)
+   - **Username**: `orbitmesh`
+   - **Password**: `orbitmesh`
+   - **Database**: `orbitmesh`
+   - **Features**: Browser-based database management interface to inspect the `sessions` table, view conversation memory records, run SQL queries, and monitor session rows.
+
+3. **FastAPI OpenAPI / Swagger Documentation**:
+   - **URL**: `http://localhost:8000/docs` (or Redoc at `http://localhost:8000/redoc`)
+   - **Features**: Interactive API explorer to execute test requests against `/api/chat` and `/api/health`.
+
+---
+
 ## 2. API Endpoints
 
 ### Health Check

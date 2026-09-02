@@ -28,6 +28,15 @@ VITE_API_URL=http://localhost:8000
 ```
 If `VITE_API_URL` is omitted in local development, Vite proxies `/api` requests to `http://127.0.0.1:8000`.
 
+### Running Tests
+To run the Vitest component test suite:
+```bash
+npm test
+# Or from the project root:
+./tests/run_frontend_tests.sh
+```
+Results are displayed in the terminal and logged to `logs/frontend_test_<timestamp>.log`.
+
 ---
 
 ## 2. Docker Containerization

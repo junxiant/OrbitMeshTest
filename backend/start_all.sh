@@ -10,7 +10,7 @@ echo "=== Starting Full OrbitMesh Backend Services ==="
 
 # 1. Start Qdrant and PostgreSQL containers
 echo "Starting PostgreSQL and Qdrant containers..."
-docker compose up -d
+docker compose up -d --build
 
 # 2. Wait for PostgreSQL and Qdrant to be ready
 echo "Waiting for services to be ready..."
@@ -34,4 +34,4 @@ echo "PostgreSQL and Qdrant are ready."
 
 # 3. Start FastAPI Server
 echo "Starting FastAPI server..."
-exec "$SCRIPT_DIR/start.sh"
+exec "$SCRIPT_DIR/start_api.sh"

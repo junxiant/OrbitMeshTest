@@ -30,11 +30,12 @@ You can also launch each service in its own terminal or script:
    ./start_qdrant.sh
    ```
    Runs on `http://localhost:6333` (gRPC: `6334`).
+   
+   *Note on Corpus Ingestion*: When starting Qdrant for the first time, populate the vector index with the documentation from `corpus/` by running `make ingest` from the project root. Indexed vectors persist permanently in the `qdrant_data` volume across container restarts.
 
 3. **Start FastAPI Application Server**:
    ```bash
-   ./start.sh
-   # or: ./start_api.sh
+   ./start_api.sh
    ```
    Runs on `http://localhost:8000`. Interactive OpenAPI documentation is available at `http://localhost:8000/docs`.
 

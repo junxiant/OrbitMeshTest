@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Temp files 
+.vite
+__pycache__/
+*.pyc
+
+.env

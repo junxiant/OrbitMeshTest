@@ -16,6 +16,7 @@
   - AWS Amplify deployment instructions in `frontend/README.md`.
 
 - **Testing & Documentation (`tests/`, `docs/`)**:
-  - Automated FastAPI test suite in `tests/test_backend_api.py`.
-  - Test runner script `tests/run_backend_tests.sh` with automated logging to `logs/`.
+  - Automated FastAPI backend test suite in `tests/test_backend_api.py` achieving 92% code coverage.
+  - Automated React frontend component test suite in `frontend/src/__tests__/App.test.jsx` using Vitest and React Testing Library.
+  - Unified test runner scripts `tests/run_backend_tests.sh` and `tests/run_frontend_tests.sh` with automated output logging to `logs/`.
   - Comprehensive testing architecture and test case matrix document in `docs/testing.md`.

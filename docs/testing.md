@@ -9,7 +9,8 @@ This document outlines the testing architecture, methodology, test matrix, and e
 All automated tests adhere to strict operational guarantees:
 - **Zero Token Cost / Offline Execution**: `LLM_MODE=mock` is forced across test suites. Calls never contact OpenRouter or consume API credits.
 - **Filesystem Isolation**: File paths (SQLite database, Qdrant vectors, log files) are redirected to isolated temporary directories (`tempfile.mkdtemp`), preventing interference with local development data (`data/`).
-- **In-Memory Testing**: The FastAPI backend is tested using Starlette/FastAPI's in-memory `TestClient` without requiring network binding or external daemon processes.
+- **In-Memory Backend Testing**: The FastAPI backend is tested using Starlette/FastAPI's in-memory `TestClient` without requiring network binding or external daemon processes.
+- **Headless Frontend Testing**: The React frontend is tested using Vitest and React Testing Library in a headless `jsdom` environment with mocked network API calls.
 
 ---
 
@@ -66,9 +67,48 @@ Target coverage for `backend/main.py`:
 
 ---
 
-## 3. Future Test Suites (Roadmap)
+## 3. Frontend Test Suite
+
+The frontend test suite is located in `frontend/src/__tests__/App.test.jsx` and verifies the React UI components, user interactions, and state management.
+
+### 3.1 Test Architecture & Tooling
+- **Test Runner**: Vitest (fast, Vite-native testing framework).
+- **DOM Simulation**: `jsdom` (in-memory headless browser environment).
+- **Component Testing**: React Testing Library (`@testing-library/react` and `@testing-library/jest-dom`).
+- **Network Isolation**: All backend API calls (`api.sendMessage`) are mocked via Vitest spies (`vi.spyOn`), ensuring 100% offline, deterministic tests that do not depend on the backend server being active.
+
+---
+
+### 3.2 Test Execution
+
+Run the frontend test suite using the unified runner script:
+```bash
+./tests/run_frontend_tests.sh
+```
+Test results are printed to the console and automatically saved to a timestamped log file in `logs/` (e.g., `logs/frontend_test_YYYYMMDD_HHMMSS.log`).
+
+Alternatively, execute within the frontend directory:
+```bash
+cd frontend && npm test
+```
+
+---
+
+### 3.3 Test Case Matrix
+
+| Test Case | Target Component | User Action / Event | Expected Outcome | Category |
+|---|---|---|---|---|
+| `renders the chatbot interface with initial welcome state` | `App.jsx` | Initial mount | Header, welcome greeting, input box, and Send button render | Component Rendering |
+| `sends query directly when a suggestion chip is clicked` | `App.jsx` | User clicks quick query chip | User message bubble appears and assistant reply displays | User Interaction / Async |
+| `displays user message and assistant reply with action and citations` | `App.jsx` | User types query and submits | Message bubble appears immediately; assistant reply, action badge, and citations display | Async Chat Flow |
+| `displays an error message when the API request fails` | `App.jsx` | API network error simulated | User-friendly error banner renders gracefully without crashing | Error Handling |
+| `toggles sidebar collapse state when sidebar button is clicked` | `App.jsx` | User clicks toggle icon | Sidebar transitions between expanded and collapsed mini-rail | UI Navigation |
+| `clears active conversation and starts a new session on New Chat click` | `App.jsx` | User clicks "+ New Chat" | Active messages clear, fresh session generated, welcome screen returns | Session Management |
+
+---
+
+## 4. Future Test Suites (Roadmap)
 
 The following suites will be added to this guide in subsequent phases:
-- **Frontend Test Suite**: Component rendering, session storage persistence, API error state banners, and chat bubble styling.
 - **Orchestrator Logic Suite**: Multi-turn slot filling, factory reset confirmation, hardware hazard escalation, and prompt injection rejection.
 - **Transport Contract Suite**: Strict JSONL stdin/stdout serialization and stderr log isolation verification.

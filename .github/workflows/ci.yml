@@ -5,6 +5,7 @@ on:
     paths:
       - 'corpus/**'
       - 'src/**'
+      - 'backend/**'
       - 'eval/**'
       - 'tests/**'
       - 'scripts/**'
@@ -17,6 +18,7 @@ on:
     paths:
       - 'corpus/**'
       - 'src/**'
+      - 'backend/**'
       - 'eval/**'
       - 'tests/**'
       - 'scripts/**'

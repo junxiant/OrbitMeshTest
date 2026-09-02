@@ -17,6 +17,8 @@ venv/
 # JavaScript
 node_modules/
 
+.vite
+
 # Local databases, vector state, and generated output
 *.db
 data/sessions.db

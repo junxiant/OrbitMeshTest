@@ -60,7 +60,7 @@ def print_db_summary(records: List[Dict[str, Any]]) -> None:
     target_info = DATABASE_URL if backend_name == "PostgreSQL" else str(SQLITE_DB_PATH)
 
     print(f"\n{'='*70}")
-    print(f"DATABASE SESSION INSPECTOR")
+    print("DATABASE SESSION INSPECTOR")
     print(f"Backend: {backend_name}")
     print(f"Target:  {target_info}")
     print(f"Total Sessions: {len(records)}")

@@ -3,12 +3,15 @@
 Tests cover:
 - Health check endpoints
 - Chat turn processing and response envelope validation
-- Request validation (empty strings, missing fields)
-- Session ID generation and preservation
+- Request validation (empty strings, missing fields, type errors, whitespace IDs)
+- Session ID generation, whitespace stripping, and preservation
 - API Key authentication (both enforced and optional modes)
-- CORS headers
-- Multi-turn continuity
-- Orchestrator exception handling
+- CORS headers on preflight OPTIONS
+- Multi-turn continuity across sequential requests
+- Orchestrator exception containment returning structured 500
+- Unicode, special characters, and large payload handling
+- Action enum mapping (ask, instruct, escalate)
+- OpenAPI schema and Swagger docs endpoints
 """
 import pytest
 from unittest.mock import patch
@@ -79,6 +82,55 @@ def test_chat_preserves_provided_session_id(client):
     assert data["session_id"] == custom_session
 
 
+def test_chat_whitespace_session_id_auto_generates_id(client):
+    """Verify when session_id contains only whitespace, a new web- ID is generated."""
+    response = client.post(
+        "/api/chat",
+        json={"session_id": "   ", "message": "My satellite node is flashing red"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["session_id"].startswith("web-")
+
+
+def test_chat_non_string_types_fail_validation(client):
+    """Verify non-string message or invalid types fail with 422."""
+    response = client.post("/api/chat", json={"message": 12345})
+    assert response.status_code == 422
+
+    response_list = client.post("/api/chat", json={"message": ["invalid", "list"]})
+    assert response_list.status_code == 422
+
+
+def test_chat_malformed_json_body(client):
+    """Verify invalid raw JSON body returns 422 or 400."""
+    response = client.post(
+        "/api/chat",
+        content="{invalid-json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code in (400, 422)
+
+
+def test_chat_unicode_and_special_characters(client):
+    """Verify messages with Unicode and special characters are handled cleanly."""
+    unicode_query = "Comprobación del enrutador R1: ¿por qué parpadea en rojo? #@$!%*"
+    response = client.post("/api/chat", json={"message": unicode_query})
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data["response"], str)
+    assert len(data["response"]) > 0
+
+
+def test_chat_large_message_payload(client):
+    """Verify messages with large payloads (>5000 characters) are processed without crashing."""
+    large_query = "Detailed router log issue: " + ("solid amber light on node " * 250)
+    response = client.post("/api/chat", json={"message": large_query})
+    assert response.status_code == 200
+    data = response.json()
+    assert "response" in data
+
+
 # ---------------------------------------------------------------------------
 # 3. Response Envelope Structure Tests
 # ---------------------------------------------------------------------------
@@ -97,6 +149,29 @@ def test_chat_response_structure_and_types(client):
     for citation in data["citations"]:
         assert "source_id" in citation
         assert "locator" in citation
+
+
+def test_chat_action_types_mapping(client):
+    """Verify various ActionEnum values (ASK, ESCALATE) map correctly to string."""
+    ask_envelope = ResponseEnvelope(
+        response="Please confirm factory reset.",
+        citations=[],
+        action=ActionEnum.ASK,
+    )
+    with patch("backend.main.orchestrator.process_turn", return_value=ask_envelope):
+        resp_ask = client.post("/api/chat", json={"message": "Reset device"})
+        assert resp_ask.status_code == 200
+        assert resp_ask.json()["action"] == "ask"
+
+    escalate_envelope = ResponseEnvelope(
+        response="Safety hazard detected. Disconnect immediately.",
+        citations=[],
+        action=ActionEnum.ESCALATE,
+    )
+    with patch("backend.main.orchestrator.process_turn", return_value=escalate_envelope):
+        resp_esc = client.post("/api/chat", json={"message": "Device smoking"})
+        assert resp_esc.status_code == 200
+        assert resp_esc.json()["action"] == "escalate"
 
 
 # ---------------------------------------------------------------------------
@@ -150,7 +225,7 @@ def test_chat_auth_enforced_valid_key(client, monkeypatch):
 def test_chat_multi_turn_session(client):
     """Verify sending multiple turns with the same session_id maintains session integrity."""
     session_id = "multi-turn-test-session"
-    
+
     # Turn 1
     resp1 = client.post(
         "/api/chat",
@@ -210,3 +285,34 @@ def test_chat_with_mocked_orchestrator(client):
         assert data["action"] == "instruct"
         assert len(data["citations"]) == 1
         assert data["citations"][0]["source_id"] == "mock-doc"
+
+
+def test_chat_orchestrator_failure_returns_500(client):
+    """Verify unhandled orchestrator exceptions are caught and return structured 500 error."""
+    with patch("backend.main.orchestrator.process_turn", side_effect=RuntimeError("Database query failed")):
+        response = client.post(
+            "/api/chat",
+            json={"session_id": "err-sess", "message": "Trigger failure"},
+        )
+        assert response.status_code == 500
+        data = response.json()
+        assert "detail" in data
+        assert "Orchestrator processing failed" in data["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 8. OpenAPI Documentation Endpoints
+# ---------------------------------------------------------------------------
+
+def test_openapi_json_and_docs_endpoints(client):
+    """Verify OpenAPI schema and Swagger docs endpoints are live and correct."""
+    docs_resp = client.get("/docs")
+    assert docs_resp.status_code == 200
+    assert "swagger" in docs_resp.text.lower() or "html" in docs_resp.headers.get("content-type", "").lower()
+
+    schema_resp = client.get("/openapi.json")
+    assert schema_resp.status_code == 200
+    schema = schema_resp.json()
+    assert "openapi" in schema
+    assert "/api/chat" in schema["paths"]
+    assert "/api/health" in schema["paths"]

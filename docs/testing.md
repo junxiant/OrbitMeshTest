@@ -55,6 +55,14 @@ To run a specific test by name:
 | `test_chat_multi_turn_session` | `POST /api/chat` | Sequential turns with same `session_id` | `200 OK` on all turns, session continuity maintained | Multi-turn State |
 | `test_cors_headers_on_preflight` | `OPTIONS /api/chat` | Cross-origin preflight request | `200 OK`, `access-control-allow-origin` header present | Network / CORS |
 | `test_chat_with_mocked_orchestrator` | `POST /api/chat` | Unit test with mocked orchestrator return | `200 OK`, properly maps `ResponseEnvelope` to `ChatResponse` | Unit Isolation |
+| `test_chat_whitespace_session_id_auto_generates_id` | `POST /api/chat` | Request with whitespace-only `session_id` | `200 OK`, generates clean `web-` prefixed session ID | State Management |
+| `test_chat_non_string_types_fail_validation` | `POST /api/chat` | Non-string message payload (integer, list) | `422 Unprocessable Entity` | Schema Validation |
+| `test_chat_malformed_json_body` | `POST /api/chat` | Broken/invalid JSON string body | `400` / `422 Unprocessable Entity` | Robustness / Input |
+| `test_chat_unicode_and_special_characters` | `POST /api/chat` | Multilingual Unicode, accents, symbols | `200 OK`, handles unicode without encoding faults | Internationalization |
+| `test_chat_large_message_payload` | `POST /api/chat` | Very large input payload (>5,000 chars) | `200 OK`, processed without crashing or memory errors | Stress / Payload Limits |
+| `test_chat_action_types_mapping` | `POST /api/chat` | Verifies `ActionEnum` (`ask`, `instruct`, `escalate`) mapping | `200 OK`, action strings properly formatted | Contract Verification |
+| `test_chat_orchestrator_failure_returns_500` | `POST /api/chat` | Orchestrator internal unhandled exception | `500 Internal Server Error`, structured error detail | Error Containment |
+| `test_openapi_json_and_docs_endpoints` | `GET /docs`, `GET /openapi.json` | Swagger UI and OpenAPI schema liveness | `200 OK`, OpenAPI JSON contains defined endpoints | API Documentation |
 
 ---
 

@@ -3,6 +3,10 @@
 ## [2026-09-03]
 
 ### Added
+- **Orchestrator End-to-End Test Suite (`tests/test_orchestrator.py`, `docs/testing.md`)**:
+  - Created a dedicated 13-test suite verifying the complete multi-turn state machine in `OrbitMeshOrchestrator`.
+  - Added test coverage for hardware hazard short-circuit escalation, prompt injection containment, model slot filling, factory reset confirmation/cancellation flows (Pro vs Standard), diagnostic RAG grounding and citation repairs, 4-turn/8-message dialogue window capping, resolution state tracking, sensitive info solicitation interception, archived documentation retrieval flags, and diagnostic step classification (`cable_checked`, `power_cycled`, `distance_checked`).
+  - Added Section 4 Orchestrator Test Case Matrix to `docs/testing.md`.
 - **Backend API Test Suite Expansion (`tests/test_backend_api.py`, `backend/main.py`)**:
   - Added structured try-except exception handling in `backend/main.py` returning HTTP 500 JSON errors for unexpected orchestrator failures.
   - Expanded test suite from 13 to 21 test cases covering whitespace session IDs, non-string type errors, malformed JSON bodies, Unicode/special characters, large payloads (>5000 chars), ActionEnum mapping variants, orchestrator exception containment, and OpenAPI/docs endpoint health.

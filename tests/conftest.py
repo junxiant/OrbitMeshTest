@@ -40,6 +40,8 @@ _FORCED_ENV: dict[str, str] = {
     "QDRANT_PATH": str(_TEST_ROOT / "qdrant"),
     # QDRANT_URL empty: never let tests talk to a remote/server instance.
     "QDRANT_URL": "",
+    "DB_BACKEND": "sqlite",
+    "DATABASE_URL": "",
     "SESSIONS_DB_PATH": str(_TEST_ROOT / "sessions.db"),
     "SQLITE_DB_PATH": str(_TEST_ROOT / "sessions.db"),  # legacy alias
     "LOGS_DIR": str(_TEST_ROOT / "logs"),

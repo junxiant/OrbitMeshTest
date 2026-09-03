@@ -1,5 +1,16 @@
 # Changelog
 
+## [2026-09-03]
+
+### Added
+- **Frontend Test Suite Expansion (`frontend/src/__tests__/App.test.jsx`, `docs/testing.md`)**:
+  - Expanded frontend unit test suite from 6 to 13 test cases using Vitest and React Testing Library.
+  - Added keyboard interaction tests for Enter submission and Shift+Enter multi-line retention.
+  - Added form validation tests for Send button disabled state on empty/whitespace input and in-flight request locking.
+  - Added session management tests for multi-conversation switching and deletion from the sidebar.
+  - Added storage persistence hydration test verifying existing sessions load from localStorage on mount.
+  - Updated `docs/testing.md` test case matrix with specifications for all 7 new test scenarios.
+
 ## [2026-09-02]
 
 ### Added

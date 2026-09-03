@@ -17,8 +17,12 @@ class OrbitMeshOrchestrator:
         self.llm = llm or LLMClient()
         self.session_manager = SessionStateManager
         self.last_retrieved_chunks = []
+        self.last_raw_envelope: Optional[ResponseEnvelope] = None
 
     def process_turn(self, session_id: str, user_message: str) -> ResponseEnvelope:
+        self.last_retrieved_chunks = []
+        self.last_raw_envelope = None
+
         # 1. Get existing or create new sess
         session = self.session_manager.get_or_create(session_id)
         session.turns_count += 1
@@ -108,6 +112,7 @@ class OrbitMeshOrchestrator:
         self.last_retrieved_chunks = retrieved_chunks
         # 8. Package the output
         proposed_envelope = self.llm.complete(clean_msg, session, retrieved_chunks)
+        self.last_raw_envelope = proposed_envelope
 
         # 9. Check for Output Guardrail
         hardware_check = OutputGuardrail.check_hardware_safety(clean_msg, proposed_envelope.response)

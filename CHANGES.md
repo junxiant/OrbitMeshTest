@@ -19,6 +19,16 @@
   - Added storage persistence hydration test verifying existing sessions load from localStorage on mount.
   - Updated `docs/testing.md` test case matrix with specifications for all 7 new test scenarios.
 ### Changed
+- **Evaluation Benchmark Rigor & Metric Corrections (`eval/runner.py`, `eval/cases.jsonl`, `src/agent/orchestrator.py`)**:
+  - Reset `last_retrieved_chunks` at turn start in `OrbitMeshOrchestrator` to prevent stale chunks leaking into guardrail or early-exit turns.
+  - Added `last_raw_envelope` capture in `OrbitMeshOrchestrator` to evaluate raw LLM citation generation independently of post-processing backfill repairs.
+  - Eliminated permissive multi-label actions (e.g. `["instruct", "ask"]`) in `eval/cases.jsonl`, replacing each turn with a strict single ground-truth action.
+  - Cleared `expected_source: []` on turns where retrieval is bypassed by design (hazard emergencies, prompt injection, resolution gratitude) so they are excluded from the retrieval denominator rather than counted as retrieval misses.
+  - Updated `eval/runner.py` to enforce `turn_passed = action_match and citation_match and guardrail_match and retrieval_match`, ensuring turns cannot pass if retrieval fails.
+  - Added Raw LLM Citation Accuracy alongside Final Repaired Citation Accuracy in evaluation summary metrics.
+  - Curated evaluation cases from 20 down to 10 representative cases (14 turns total, reducing live LLM API calls from ~32 to ~10) to avoid API rate limiting on public model tiers while maintaining 100% coverage across core capabilities.
+  - Documented Evaluation Benchmark Suite in `docs/testing.md` Section 5.
+  - Updated Section 4 Observed Failures, Root Causes & Remediations in `docs/design_notes.md` detailing HTTP 429 rate limit pacing, guardrail retrieval isolation, and strict single-action protocol alignment.
 - **PostgreSQL Session Storage (`src/state/session.py`, `scripts/init_db.py`)**:
   - Implemented PostgreSQL session storage support via `psycopg2` in `SessionStateManager`, controlled by `DB_BACKEND=postgres` and `DATABASE_URL`.
   - Added automatic table schema creation (`sessions` table) with dual PostgreSQL/SQLite query compatibility and graceful fallback.

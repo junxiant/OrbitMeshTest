@@ -34,11 +34,14 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
     # Metric Counters
     action_matches = 0
 
-    # Retrieval Recall (checks raw retriever output, not citations)
+    # Retrieval Recall (checks raw retriever output)
     retrieval_hits = 0
     retrieval_applicable_turns = 0
 
-    # Citation Source Accuracy (checks final citations against expected sources)
+    # Raw LLM Citation Accuracy (checks LLM output before guardrail repair)
+    raw_citation_hits = 0
+
+    # Final Citation Source Accuracy & MRR (checks final envelope after repair)
     citation_hits = 0
     citation_applicable_turns = 0
     reciprocal_ranks = []
@@ -68,6 +71,9 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
             if isinstance(exp_source, str):
                 exp_source = [exp_source] if exp_source else []
 
+            if total_turns > 1:
+                time.sleep(1.5)
+
             envelope = orchestrator.process_turn(session_id, user_input)
 
             # 1. Action Protocol Accuracy
@@ -75,22 +81,36 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
             if action_match:
                 action_matches += 1
 
-            # 2. Retrieval Recall@K (checks raw retriever chunks, not LLM citations)
+            # 2. Retrieval Recall@K (checks raw retriever chunks on grounded turns)
             retrieval_match = True
             if exp_source:
                 retrieval_applicable_turns += 1
-                retrieved_source_ids = set()
-                for chunk in orchestrator.last_retrieved_chunks:
-                    retrieved_source_ids.add(chunk.metadata.source_id.strip().lower())
+                retrieved_source_ids = {
+                    chunk.metadata.source_id.strip().lower()
+                    for chunk in orchestrator.last_retrieved_chunks
+                }
                 if any(src.strip().lower() in retrieved_source_ids for src in exp_source):
                     retrieval_hits += 1
                 else:
                     retrieval_match = False
 
-            # 3. Citation Source Accuracy & MRR (checks final envelope citations)
+            # 3. Citation Evaluation: Raw LLM Citations vs. Repaired Final Citations
             citation_match = True
+            raw_matched = False
             if exp_source:
                 citation_applicable_turns += 1
+
+                # 3a. Check raw LLM citations (before validate_and_repair_citations)
+                raw_envelope = getattr(orchestrator, "last_raw_envelope", None)
+                if raw_envelope and raw_envelope.citations:
+                    if any(
+                        any(src.strip().lower() == c.source_id.strip().lower() for src in exp_source)
+                        for c in raw_envelope.citations
+                    ):
+                        raw_citation_hits += 1
+                        raw_matched = True
+
+                # 3b. Check final envelope citations (after validate_and_repair_citations)
                 matched_rank = None
                 for rank_idx, c in enumerate(envelope.citations, start=1):
                     if any(src.strip().lower() == c.source_id.strip().lower() for src in exp_source):
@@ -129,10 +149,8 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
                 if guardrail_match:
                     guardrail_hits += 1
 
-            # Does not have retrieval_match
-            # If retrieval fail, turn can still pass...
-            # End-to-end acc
-            turn_passed = action_match and citation_match and guardrail_match
+            # 5. End-to-End Turn Pass: Requires Action, Guardrail, Citations, AND Retrieval
+            turn_passed = action_match and citation_match and guardrail_match and retrieval_match
             if turn_passed:
                 passed_turns += 1
 
@@ -144,7 +162,8 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
                 f"{case_id} (T{t_idx})",
                 user_input[:30] + "..." if len(user_input) > 30 else user_input,
                 f"Exp: {exp_act_str} | Act: {envelope.action.value}",
-                cite_str[:40] + "..." if len(cite_str) > 40 else cite_str,
+                "HIT" if retrieval_match else "MISS",
+                cite_str[:35] + "..." if len(cite_str) > 35 else cite_str,
                 status
             ])
 
@@ -155,13 +174,16 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
                 "expected_action": exp_action,
                 "actual_action": envelope.action.value,
                 "expected_source": exp_source,
+                "retrieval_match": retrieval_match,
+                "raw_citation_match": raw_matched,
+                "final_citation_match": citation_match,
                 "retrieved_sources": list(set(ch.metadata.source_id for ch in orchestrator.last_retrieved_chunks)),
                 "citations": [{"source_id": c.source_id, "locator": c.locator} for c in envelope.citations],
                 "response": envelope.response,
                 "passed": turn_passed,
             })
 
-    headers = ["Case (Turn)", "User Query", "Action Match", "Citations", "Status"]
+    headers = ["Case (Turn)", "User Query", "Action Match", "Retrieval", "Citations", "Status"]
     table_str = tabulate(results_table, headers=headers, tablefmt="github")
     print(table_str)
 
@@ -169,7 +191,8 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
     e2e_acc = (passed_turns / max(total_turns, 1)) * 100
     action_acc = (action_matches / max(total_turns, 1)) * 100
     retrieval_recall = (retrieval_hits / max(retrieval_applicable_turns, 1)) * 100
-    citation_acc = (citation_hits / max(citation_applicable_turns, 1)) * 100
+    raw_cite_acc = (raw_citation_hits / max(citation_applicable_turns, 1)) * 100
+    final_cite_acc = (citation_hits / max(citation_applicable_turns, 1)) * 100
     mrr = (sum(reciprocal_ranks) / max(len(reciprocal_ranks), 1)) if reciprocal_ranks else 0.0
     guard_acc = (guardrail_hits / max(guardrail_applicable_turns, 1)) * 100
 
@@ -178,7 +201,8 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
     print("=======================================================")
     metrics_summary = [
         ["Retrieval Recall@4", f"{retrieval_hits}/{retrieval_applicable_turns}", f"{retrieval_recall:.1f}%"],
-        ["Citation Source Accuracy", f"{citation_hits}/{citation_applicable_turns}", f"{citation_acc:.1f}%"],
+        ["Raw LLM Citation Accuracy", f"{raw_citation_hits}/{citation_applicable_turns}", f"{raw_cite_acc:.1f}%"],
+        ["Final Citation Accuracy (Repaired)", f"{citation_hits}/{citation_applicable_turns}", f"{final_cite_acc:.1f}%"],
         ["Mean Reciprocal Rank (MRR)", f"{len(reciprocal_ranks)} queries", f"{mrr:.3f}"],
         ["Action Protocol Accuracy", f"{action_matches}/{total_turns}", f"{action_acc:.1f}%"],
         ["Guardrail Safety Precision", f"{guardrail_hits}/{guardrail_applicable_turns}", f"{guard_acc:.1f}%"],
@@ -198,7 +222,8 @@ def run_evaluation(cases_path: Path = PROJECT_ROOT / "eval" / "cases.jsonl"):
             "passed_turns": passed_turns,
             "metrics": {
                 "retrieval_recall": retrieval_recall,
-                "citation_source_accuracy": citation_acc,
+                "raw_citation_accuracy": raw_cite_acc,
+                "final_citation_accuracy": final_cite_acc,
                 "mrr": mrr,
                 "action_accuracy": action_acc,
                 "guardrail_precision": guard_acc,

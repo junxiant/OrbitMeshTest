@@ -122,8 +122,37 @@ cd frontend && npm test
 
 ---
 
-## 4. Future Test Suites (Roadmap)
+## 4. Orchestrator End-to-End Test Suite
 
-The following suites will be added to this guide in subsequent phases:
-- **Orchestrator Logic Suite**: Multi-turn slot filling, factory reset confirmation, hardware hazard escalation, and prompt injection rejection.
-- **Transport Contract Suite**: Strict JSONL stdin/stdout serialization and stderr log isolation verification.
+The orchestrator test suite is located in `tests/test_orchestrator.py` and targets `src/agent/orchestrator.py`.
+
+### 4.1 Test Execution
+
+Run via pytest:
+```bash
+LLM_MODE=mock pytest tests/test_orchestrator.py -v
+```
+
+### 4.2 Test Case Matrix
+
+| Test Function | Target Component | Test Scenario | Expected Outcome | Category |
+|---|---|---|---|---|
+| `test_hardware_hazard_escalation_short_circuit` | `OrbitMeshOrchestrator` | Smoke, fire, sparks, or thermal emergency query | `ActionEnum.ESCALATE`, `is_escalated = True`, immediate short-circuit | Safety & Escalation |
+| `test_prompt_injection_containment` | `OrbitMeshOrchestrator` | Adversarial system prompt override instruction | `ActionEnum.ASK`, refusal canned response, no prompt leaks | Security Guardrails |
+| `test_model_identification_slot_filling` | `OrbitMeshOrchestrator` | Progressive mentions of Pro gateway, R1 router, N1 node | `session.identified_model` dynamically updated in session state | Slot-Filling |
+| `test_factory_reset_warning_and_cancellation` | `OrbitMeshOrchestrator` | Reset request followed by "no / cancel" response | Issues warning on Turn 1; clears pending state and suggests non-destructive alternative on Turn 2 | Multi-Turn State Machine |
+| `test_factory_reset_confirmation_standard_model` | `OrbitMeshOrchestrator` | R1/N1 reset request followed by "yes / proceed" | Returns standard 15-second reset step citing `reset-recovery-guide`; records `factory_reset` step | Multi-Turn State Machine |
+| `test_factory_reset_confirmation_pro_model` | `OrbitMeshOrchestrator` | Pro reset request followed by "yes / confirm" | Returns Pro 10-second reset pin step citing `pro-quick-start-guide` | Multi-Turn State Machine |
+| `test_factory_reset_ask_alternatives` | `OrbitMeshOrchestrator` | Inquiry for alternatives before resetting | Intercepts with power cycling and pairing reset recommendations without wiping | Multi-Turn State Machine |
+| `test_rag_end_to_end_diagnostic_turn` | `OrbitMeshOrchestrator` | In-domain diagnostic query ("N1 solid amber") | Retrieves grounded chunks, validates/repairs citations, sets `INSTRUCT` or `ASK` | RAG End-to-End |
+| `test_multi_turn_dialogue_window_capping` | `OrbitMeshOrchestrator` | 6 sequential conversation turns in single session | Dialogue window capped at 4 turns (8 messages); turns 1–2 discarded from window | Memory & Windowing |
+| `test_resolution_state_tracking` | `OrbitMeshOrchestrator` | Turn resulting in `ActionEnum.RESOLVED` | `session.is_resolved = True` persisted to database | State Management |
+| `test_sensitive_info_solicitation_intercepted` | `OrbitMeshOrchestrator` | LLM response attempting to solicit credit card / passwords | Output guardrail sanitizes and scrubs sensitive solicitation | Output Guardrails |
+| `test_archived_documentation_retrieval_flag` | `OrbitMeshOrchestrator` | Query mentioning "archive" or "superseded" | Passes `include_archived=True` to retriever to search legacy versions | Knowledge Retrieval |
+| `test_diagnostic_step_classification` | `OrbitMeshOrchestrator` | Responses with cable, power cycle, or distance steps | Correctly appends `cable_checked`, `power_cycled`, or `distance_checked` to `session.attempted_steps` | Diagnostic Tracking |
+
+---
+
+## 5. Transport Contract Suite (Roadmap)
+
+- **Transport Contract Suite**: Strict JSONL stdin/stdout serialization and stderr log isolation verification (`tests/test_contract.py`).

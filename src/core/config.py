@@ -17,6 +17,9 @@ SQLITE_DB_PATH = Path(
 )
 SESSIONS_DB_PATH = SQLITE_DB_PATH
 
+DB_BACKEND = os.getenv('DB_BACKEND', 'sqlite').lower().strip()
+DATABASE_URL = os.getenv('DATABASE_URL', '').strip()
+
 LOGS_DIR = Path(os.getenv('LOGS_DIR', str(PROJECT_ROOT / 'logs')))
 LOG_FILE_PATH = Path(os.getenv('LOG_FILE_PATH', str(LOGS_DIR / 'app.log')))
 EVAL_RESULTS_DIR = Path(os.getenv('EVAL_RESULTS_DIR', str(PROJECT_ROOT / 'eval_results')))

@@ -10,6 +10,14 @@
   - Added session management tests for multi-conversation switching and deletion from the sidebar.
   - Added storage persistence hydration test verifying existing sessions load from localStorage on mount.
   - Updated `docs/testing.md` test case matrix with specifications for all 7 new test scenarios.
+### Changed
+- **Server-Side Hybrid Retrieval & Dynamic Calibration (`src/rag/`, `src/ingestion/`)**:
+  - Migrated Qdrant knowledge collection to named dense vectors (`BAAI/bge-small-en-v1.5`) and sparse BM25 vectors (`Qdrant/bm25` via FastEmbed).
+  - Moved RRF fusion and per-track score thresholding to the Qdrant server using `query_points` with `prefetch` and `models.FusionQuery(fusion=models.Fusion.RRF)`.
+  - Added automated dynamic calibration during corpus ingestion in `VectorIndexer.calibrate_thresholds()`: probes in-domain vs out-of-domain separation margins and persists dynamic `calibrated_dense_floor` and `calibrated_sparse_floor` in collection metadata.
+  - Updated `HybridRetriever` to dynamically read calibrated score floors from Qdrant metadata on startup.
+- **Backend Automation (`backend/start_all.sh`)**:
+  - Added automated, conditional Qdrant knowledge corpus ingestion on startup. The script checks Qdrant collection point count: runs `scripts/ingest.sh` if empty/uninitialized, and skips ingestion immediately if already populated.
 
 ## [2026-09-02]
 

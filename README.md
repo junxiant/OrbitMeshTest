@@ -7,6 +7,7 @@ For full technical architecture, chunking rationale, state design, and evaluatio
 ## Components Documentation
 
 The project includes web application layers in addition to the core CLI orchestrator:
+`NOTE: Deployment on AWS not yet tested`
 
 - **Frontend Application ([`frontend/`](frontend/))**:
   - Full-page responsive React chatbot user interface built with Vite.

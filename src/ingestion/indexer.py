@@ -18,7 +18,8 @@ from src.core.config import (
 from src.core.models import DocumentChunk
 from src.core.logging import logger
 from src.ingestion.parser import MarkdownCorpusParser
-from src.rag.embeddings import LocalEmbedder, EMBEDDER_FINGERPRINT
+from src.rag.embeddings import LocalEmbedder, LocalSparseEmbedder, EMBEDDER_FINGERPRINT
+from typing import Tuple
 
 # Reserved point that stores collection-level metadata (embedder fingerprint,
 # manifest version). It carries a zero vector and payload {"is_meta": true, ...}
@@ -45,6 +46,7 @@ class VectorIndexer:
     ):
         target_dir = storage_dir or db_dir or QDRANT_STORAGE_DIR
         self.embedder = LocalEmbedder()
+        self.sparse_embedder = LocalSparseEmbedder()
         self.is_remote = False
         self.client = self._init_client(url, target_dir)
         self._init_collection()
@@ -79,13 +81,29 @@ class VectorIndexer:
 
     def _init_collection(self) -> None:
         try:
+            if self.client.collection_exists(self.COLLECTION_NAME):
+                try:
+                    coll_info = self.client.get_collection(self.COLLECTION_NAME)
+                    vectors_cfg = coll_info.config.params.vectors
+                    is_named = isinstance(vectors_cfg, dict) and "dense" in vectors_cfg
+                    if not is_named:
+                        logger.info(f"Recreating {self.COLLECTION_NAME} to support named dense and sparse vectors...")
+                        self.client.delete_collection(self.COLLECTION_NAME)
+                except Exception as e:
+                    logger.warning(f"Error checking collection vector configuration: {e}")
+
             if not self.client.collection_exists(self.COLLECTION_NAME):
                 self.client.create_collection(
                     collection_name=self.COLLECTION_NAME,
-                    vectors_config=qmodels.VectorParams(
-                        size=self.VECTOR_DIMENSION,
-                        distance=qmodels.Distance.COSINE
-                    )
+                    vectors_config={
+                        "dense": qmodels.VectorParams(
+                            size=self.VECTOR_DIMENSION,
+                            distance=qmodels.Distance.COSINE
+                        )
+                    },
+                    sparse_vectors_config={
+                        "sparse": qmodels.SparseVectorParams()
+                    }
                 )
                 if self.is_remote:
                     self.client.create_payload_index(
@@ -160,17 +178,30 @@ class VectorIndexer:
                 "Delete the Qdrant storage (or collection) and re-run ingestion."
             )
 
-    def _write_meta(self, manifest_version: Optional[str]) -> None:
+    def _write_meta(
+        self,
+        manifest_version: Optional[str],
+        calibrated_dense_floor: Optional[float] = None,
+        calibrated_sparse_floor: Optional[float] = None
+    ) -> None:
         payload = {
             "is_meta": True,
             "embedder": EMBEDDER_FINGERPRINT,
             "manifest_version": manifest_version or "",
         }
+        if calibrated_dense_floor is not None:
+            payload["calibrated_dense_floor"] = calibrated_dense_floor
+        if calibrated_sparse_floor is not None:
+            payload["calibrated_sparse_floor"] = calibrated_sparse_floor
+
         self.client.upsert(
             collection_name=self.COLLECTION_NAME,
             points=[qmodels.PointStruct(
                 id=META_POINT_ID,
-                vector=[0.0] * self.VECTOR_DIMENSION,
+                vector={
+                    "dense": [0.0] * self.VECTOR_DIMENSION,
+                    "sparse": qmodels.SparseVector(indices=[0], values=[0.0])
+                },
                 payload=payload
             )],
             wait=True
@@ -222,6 +253,113 @@ class VectorIndexer:
         return sources
 
     # -- Ingestion -------------------------------------------------------------
+
+    def calibrate_thresholds(self, chunks: List[DocumentChunk]) -> Tuple[float, float]:
+        """Dynamically calibrate dense and sparse score floors for abstention."""
+        in_domain_queries = [
+            "My N1 satellite node has a solid amber light",
+            "The N1 node is flashing red continuously",
+            "My R1 main router solid red light no internet",
+            "How do I set up my new OrbitMesh R5 Pro gateway?",
+            "What is the latest stable firmware version",
+            "My wireless N1 node keeps disconnecting",
+            "factory reset everything to start fresh",
+        ]
+        for c in chunks[:5]:
+            if c.metadata.doc_title and c.metadata.doc_title not in in_domain_queries:
+                in_domain_queries.append(f"{c.metadata.doc_title} troubleshooting")
+
+        out_of_domain_queries = [
+            "What is the capital of France?",
+            "chocolate cake recipe",
+            "python list comprehension tutorial",
+            "who won the world cup football match",
+            "how do I tie a tie step by step",
+            "best stocks to buy right now today",
+            "translate hello world to spanish",
+            "what is the weather like tomorrow",
+        ]
+
+        in_dense_scores = []
+        in_sparse_scores = []
+        for q in in_domain_queries:
+            try:
+                d_vec = self.embedder.embed_query(q)
+                s_emb = self.sparse_embedder.embed_query(q)
+                s_vec = qmodels.SparseVector(indices=s_emb.indices.tolist(), values=s_emb.values.tolist())
+
+                d_res = self.client.query_points(
+                    collection_name=self.COLLECTION_NAME,
+                    query=d_vec,
+                    using="dense",
+                    query_filter=qmodels.Filter(must_not=[not_meta_condition()]),
+                    limit=1
+                )
+                if d_res.points:
+                    in_dense_scores.append(d_res.points[0].score)
+
+                s_res = self.client.query_points(
+                    collection_name=self.COLLECTION_NAME,
+                    query=s_vec,
+                    using="sparse",
+                    query_filter=qmodels.Filter(must_not=[not_meta_condition()]),
+                    limit=1
+                )
+                if s_res.points:
+                    in_sparse_scores.append(s_res.points[0].score)
+            except Exception as e:
+                logger.warning(f"Calibration error on query '{q}': {e}")
+
+        ood_dense_scores = []
+        ood_sparse_scores = []
+        for q in out_of_domain_queries:
+            try:
+                d_vec = self.embedder.embed_query(q)
+                s_emb = self.sparse_embedder.embed_query(q)
+                s_vec = qmodels.SparseVector(indices=s_emb.indices.tolist(), values=s_emb.values.tolist())
+
+                d_res = self.client.query_points(
+                    collection_name=self.COLLECTION_NAME,
+                    query=d_vec,
+                    using="dense",
+                    query_filter=qmodels.Filter(must_not=[not_meta_condition()]),
+                    limit=1
+                )
+                if d_res.points:
+                    ood_dense_scores.append(d_res.points[0].score)
+
+                s_res = self.client.query_points(
+                    collection_name=self.COLLECTION_NAME,
+                    query=s_vec,
+                    using="sparse",
+                    query_filter=qmodels.Filter(must_not=[not_meta_condition()]),
+                    limit=1
+                )
+                if s_res.points:
+                    ood_sparse_scores.append(s_res.points[0].score)
+            except Exception as e:
+                logger.warning(f"Calibration error on OOD query '{q}': {e}")
+
+        min_in_dense = min(in_dense_scores) if in_dense_scores else 0.68
+        max_ood_dense = max(ood_dense_scores) if ood_dense_scores else 0.57
+        if min_in_dense > max_ood_dense:
+            dense_floor = round((min_in_dense + max_ood_dense) / 2.0, 3)
+        else:
+            dense_floor = 0.62
+
+        min_in_sparse = min(in_sparse_scores) if in_sparse_scores else 2.0
+        max_ood_sparse = max(ood_sparse_scores) if ood_sparse_scores else 0.0
+        if min_in_sparse > max_ood_sparse:
+            sparse_floor = round((min_in_sparse + max_ood_sparse) / 2.0, 2)
+        else:
+            sparse_floor = 1.0
+
+        logger.info(
+            f"Automated calibration completed: "
+            f"Dense floor={dense_floor} (in-domain min={min_in_dense:.3f}, OOD max={max_ood_dense:.3f}), "
+            f"Sparse floor={sparse_floor} (in-domain min={min_in_sparse:.2f}, OOD max={max_ood_sparse:.2f})"
+        )
+        return dense_floor, sparse_floor
 
     def index_chunks(
         self,
@@ -289,7 +427,8 @@ class VectorIndexer:
                 header_prefix = f"[{c.metadata.doc_title}] {breadcrumb}"
                 texts.append(f"{header_prefix}\n\n{c.text}")
 
-            embeddings = self.embedder.embed_documents(texts)
+            dense_embeddings = self.embedder.embed_documents(texts)
+            sparse_embeddings = self.sparse_embedder.embed_documents(texts)
 
             points = []
             for i, c in enumerate(new_chunks):
@@ -307,7 +446,15 @@ class VectorIndexer:
                     "effective_date": c.metadata.effective_date or "",
                     "sha256": c.metadata.sha256,
                 }
-                points.append(qmodels.PointStruct(id=point_id, vector=embeddings[i], payload=payload))
+                sp = sparse_embeddings[i]
+                vector = {
+                    "dense": dense_embeddings[i],
+                    "sparse": qmodels.SparseVector(
+                        indices=sp.indices.tolist(),
+                        values=sp.values.tolist()
+                    )
+                }
+                points.append(qmodels.PointStruct(id=point_id, vector=vector, payload=payload))
 
             self.client.upsert(
                 collection_name=self.COLLECTION_NAME,
@@ -322,8 +469,11 @@ class VectorIndexer:
             manifest_source_ids, set(incoming_by_source)
         ) if manifest_source_ids is not None else 0
 
-        # 6. Refresh the collection meta point (embedder fingerprint + manifest version).
-        self._write_meta(manifest_version)
+        # 6. Automated dynamic calibration of score thresholds
+        dense_floor, sparse_floor = self.calibrate_thresholds(chunks)
+
+        # 7. Refresh the collection meta point (embedder fingerprint + manifest version + calibrated thresholds).
+        self._write_meta(manifest_version, calibrated_dense_floor=dense_floor, calibrated_sparse_floor=sparse_floor)
 
         logger.info(
             f"Ingestion reconciled: indexed {len(new_chunks)} new chunk(s), skipped {skipped_count} "

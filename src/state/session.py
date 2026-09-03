@@ -6,22 +6,54 @@ from contextlib import closing
 from pathlib import Path
 from typing import Optional, Any, List, Union
 
-from src.core.config import SQLITE_DB_PATH
+from src.core.config import SQLITE_DB_PATH, DB_BACKEND, DATABASE_URL
 from src.core.models import SessionState, ChatMessage, DiagnosticSession
 from src.core.logging import logger
 
 _UNSET = object()
 
-# To store / retrieve / update session states used for memory
-# Check issue on attempted_steps and reported_issue
+
+# Session State Management: Supports PostgreSQL and SQLite
 class SessionStateManager:
     _db_path: Path = SQLITE_DB_PATH
     _initialized: bool = False
 
     @classmethod
+    def is_postgres(cls) -> bool:
+        return DB_BACKEND == "postgres" and bool(DATABASE_URL)
+
+    @classmethod
     def _init_db_once(cls) -> None:
         if cls._initialized:
             return
+        if cls.is_postgres():
+            try:
+                import psycopg2
+                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                CREATE TABLE IF NOT EXISTS sessions (
+                                    session_id VARCHAR(255) PRIMARY KEY,
+                                    identified_model VARCHAR(255),
+                                    attempted_steps TEXT,
+                                    pending_confirmation VARCHAR(255),
+                                    dialogue_window TEXT,
+                                    created_at DOUBLE PRECISION,
+                                    updated_at DOUBLE PRECISION,
+                                    reported_issue TEXT,
+                                    confirmed_facts TEXT,
+                                    turns_count INTEGER DEFAULT 0,
+                                    is_escalated INTEGER DEFAULT 0,
+                                    is_resolved INTEGER DEFAULT 0
+                                );
+                            """)
+                cls._initialized = True
+                logger.info(f"Initialized PostgreSQL session storage: {DATABASE_URL}")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to connect to PostgreSQL ({e}). Falling back to SQLite at {cls._db_path}")
+
         cls._db_path.parent.mkdir(parents=True, exist_ok=True)
         with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
             with conn:
@@ -44,7 +76,7 @@ class SessionStateManager:
         cls._initialized = True
 
     @classmethod
-    def _row_to_state(cls, row: sqlite3.Row) -> SessionState:
+    def _row_to_state(cls, row: Union[sqlite3.Row, dict]) -> SessionState:
         dialogue_raw = json.loads(row["dialogue_window"] or "[]")
         dialogue_window = [ChatMessage(**msg) for msg in dialogue_raw]
         attempted_steps = json.loads(row["attempted_steps"] or "[]")
@@ -68,16 +100,29 @@ class SessionStateManager:
     @classmethod
     def get_or_create(cls, session_id: str) -> SessionState:
         cls._init_db_once()
-        with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
-            row = cursor.fetchone()
-            if row is not None:
-                return cls._row_to_state(row)
+        if cls.is_postgres():
+            try:
+                import psycopg2
+                from psycopg2.extras import RealDictCursor
+                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                    with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                        cur.execute("SELECT * FROM sessions WHERE session_id = %s", (session_id,))
+                        row = cur.fetchone()
+                        if row is not None:
+                            return cls._row_to_state(row)
+            except Exception as e:
+                logger.error(f"Error fetching session from PostgreSQL: {e}")
+        else:
+            with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+                row = cursor.fetchone()
+                if row is not None:
+                    return cls._row_to_state(row)
 
         new_state = SessionState(session_id=session_id)
         cls.update_session(new_state)
-        logger.debug(f"Created new session in SQLite: {session_id}")
+        logger.debug(f"Created new session: {session_id}")
         return new_state
 
     @classmethod
@@ -100,7 +145,6 @@ class SessionStateManager:
         session.dialogue_window.append(user_msg)
         session.dialogue_window.append(asst_msg)
 
-        # Last n turns * 2 = total messages
         max_msgs = max_window_turns * 2
         if len(session.dialogue_window) > max_msgs:
             session.dialogue_window = session.dialogue_window[-max_msgs:]
@@ -155,7 +199,7 @@ class SessionStateManager:
         return {
             "identified_model": state.identified_model or "Unknown (Needs identification)",
             "attempted_steps": state.attempted_steps,
-            "pending_confirmation": state.pending_confirmation, # Factory reset
+            "pending_confirmation": state.pending_confirmation,
             "recent_messages": [msg.model_dump() for msg in state.dialogue_window],
         }
 
@@ -166,6 +210,49 @@ class SessionStateManager:
         dialogue_json = json.dumps([msg.model_dump() for msg in session.dialogue_window])
         attempted_json = json.dumps(session.attempted_steps)
         confirmed_json = json.dumps(session.confirmed_facts)
+
+        params = (
+            session.session_id,
+            session.identified_model,
+            attempted_json,
+            session.pending_confirmation,
+            dialogue_json,
+            session.created_at,
+            session.updated_at,
+            session.reported_issue,
+            confirmed_json,
+            session.turns_count,
+            int(session.is_escalated),
+            int(session.is_resolved),
+        )
+
+        if cls.is_postgres():
+            try:
+                import psycopg2
+                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("""
+                                INSERT INTO sessions (
+                                    session_id, identified_model, attempted_steps, pending_confirmation,
+                                    dialogue_window, created_at, updated_at, reported_issue,
+                                    confirmed_facts, turns_count, is_escalated, is_resolved
+                                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                ON CONFLICT (session_id) DO UPDATE SET
+                                    identified_model = EXCLUDED.identified_model,
+                                    attempted_steps = EXCLUDED.attempted_steps,
+                                    pending_confirmation = EXCLUDED.pending_confirmation,
+                                    dialogue_window = EXCLUDED.dialogue_window,
+                                    updated_at = EXCLUDED.updated_at,
+                                    reported_issue = EXCLUDED.reported_issue,
+                                    confirmed_facts = EXCLUDED.confirmed_facts,
+                                    turns_count = EXCLUDED.turns_count,
+                                    is_escalated = EXCLUDED.is_escalated,
+                                    is_resolved = EXCLUDED.is_resolved
+                            """, params)
+                return
+            except Exception as e:
+                logger.error(f"Error updating session in PostgreSQL: {e}")
 
         with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
             with conn:
@@ -186,24 +273,22 @@ class SessionStateManager:
                         turns_count = excluded.turns_count,
                         is_escalated = excluded.is_escalated,
                         is_resolved = excluded.is_resolved
-                """, (
-                    session.session_id,
-                    session.identified_model,
-                    attempted_json,
-                    session.pending_confirmation,
-                    dialogue_json,
-                    session.created_at,
-                    session.updated_at,
-                    session.reported_issue,
-                    confirmed_json,
-                    session.turns_count,
-                    int(session.is_escalated),
-                    int(session.is_resolved),
-                ))
+                """, params)
 
     @classmethod
     def clear_session(cls, session_id: str) -> None:
         cls._init_db_once()
+        if cls.is_postgres():
+            try:
+                import psycopg2
+                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM sessions WHERE session_id = %s", (session_id,))
+                return
+            except Exception as e:
+                logger.error(f"Error deleting session from PostgreSQL: {e}")
+
         with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
             with conn:
                 conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
@@ -211,6 +296,17 @@ class SessionStateManager:
     @classmethod
     def reset_all(cls) -> None:
         cls._init_db_once()
+        if cls.is_postgres():
+            try:
+                import psycopg2
+                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                    with conn:
+                        with conn.cursor() as cur:
+                            cur.execute("DELETE FROM sessions")
+                return
+            except Exception as e:
+                logger.error(f"Error resetting sessions in PostgreSQL: {e}")
+
         with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
             with conn:
                 conn.execute("DELETE FROM sessions")

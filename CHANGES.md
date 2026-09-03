@@ -11,6 +11,10 @@
   - Added storage persistence hydration test verifying existing sessions load from localStorage on mount.
   - Updated `docs/testing.md` test case matrix with specifications for all 7 new test scenarios.
 ### Changed
+- **PostgreSQL Session Storage (`src/state/session.py`, `scripts/init_db.py`)**:
+  - Implemented PostgreSQL session storage support via `psycopg2` in `SessionStateManager`, controlled by `DB_BACKEND=postgres` and `DATABASE_URL`.
+  - Added automatic table schema creation (`sessions` table) with dual PostgreSQL/SQLite query compatibility and graceful fallback.
+  - Added `scripts/init_db.py` and `scripts/init_db.sh` for explicit database initialization and inspection.
 - **Server-Side Hybrid Retrieval & Dynamic Calibration (`src/rag/`, `src/ingestion/`)**:
   - Migrated Qdrant knowledge collection to named dense vectors (`BAAI/bge-small-en-v1.5`) and sparse BM25 vectors (`Qdrant/bm25` via FastEmbed).
   - Moved RRF fusion and per-track score thresholding to the Qdrant server using `query_points` with `prefetch` and `models.FusionQuery(fusion=models.Fusion.RRF)`.

@@ -3,6 +3,10 @@
 ## [2026-09-03]
 
 ### Added
+- **Backend API Test Suite Expansion (`tests/test_backend_api.py`, `backend/main.py`)**:
+  - Added structured try-except exception handling in `backend/main.py` returning HTTP 500 JSON errors for unexpected orchestrator failures.
+  - Expanded test suite from 13 to 21 test cases covering whitespace session IDs, non-string type errors, malformed JSON bodies, Unicode/special characters, large payloads (>5000 chars), ActionEnum mapping variants, orchestrator exception containment, and OpenAPI/docs endpoint health.
+  - Updated `docs/testing.md` test matrix with all new backend test scenarios and expected outcomes.
 - **Frontend Test Suite Expansion (`frontend/src/__tests__/App.test.jsx`, `docs/testing.md`)**:
   - Expanded frontend unit test suite from 6 to 13 test cases using Vitest and React Testing Library.
   - Added keyboard interaction tests for Enter submission and Shift+Enter multi-line retention.

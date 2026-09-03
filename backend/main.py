@@ -100,7 +100,13 @@ def process_chat(request: ChatRequest, _: Optional[str] = Depends(verify_api_key
     if not session_id:
         session_id = f"web-{uuid.uuid4().hex[:8]}"
 
-    envelope = orchestrator.process_turn(session_id, request.message)
+    try:
+        envelope = orchestrator.process_turn(session_id, request.message)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Orchestrator processing failed: {e}",
+        )
 
     citations = [
         CitationResponse(source_id=c.source_id, locator=c.locator)

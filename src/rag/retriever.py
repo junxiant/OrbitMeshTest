@@ -11,6 +11,7 @@ from src.core.models import DocumentChunk, ChunkMetadata
 from src.core.config import CORPUS_DIR, MANIFEST_PATH, DENSE_SCORE_FLOOR, BM25_SCORE_FLOOR
 from src.core.logging import logger
 from src.ingestion.indexer import VectorIndexer, not_meta_condition
+from src.rag.embeddings import LocalSparseEmbedder
 from src.ingestion.parser import MarkdownCorpusParser
 
 # English stop words excluded from BM25 scoring so that function-word-only
@@ -148,11 +149,18 @@ class HybridRetriever:
         self.indexer = indexer or VectorIndexer()
         self.client = self.indexer.client
         self.embedder = self.indexer.embedder
+        self.sparse_embedder = getattr(self.indexer, "sparse_embedder", None) or LocalSparseEmbedder()
         self.collection_name = self.indexer.COLLECTION_NAME
-        # Fail loudly if the stored vectors were produced by a different embedder
-        # than the one that will embed queries (RuntimeError on mismatch).
         self.indexer.check_embedder_compatibility()
         self.bm25_index = BM25Index(corpus_dir=corpus_dir, manifest_path=manifest_path)
+
+        # Dynamically load calibrated score floors from Qdrant collection meta
+        meta = self.indexer.read_meta() or {}
+        self.dense_score_floor = float(meta.get("calibrated_dense_floor") or DENSE_SCORE_FLOOR)
+        self.sparse_score_floor = float(meta.get("calibrated_sparse_floor") or BM25_SCORE_FLOOR)
+        logger.info(
+            f"Initialized HybridRetriever with floors: Dense={self.dense_score_floor}, Sparse={self.sparse_score_floor}"
+        )
 
     def retrieve(
         self,
@@ -249,47 +257,95 @@ class HybridRetriever:
         # 3 x top_k documents
         limit = min(top_k * 3, max(total_count, 1))
 
+        # Try Qdrant server-side hybrid retrieval (dense + sparse + RRF)
+        try:
+            sparse_res = self.sparse_embedder.embed_query(query)
+            sparse_query = qmodels.SparseVector(
+                indices=sparse_res.indices.tolist(),
+                values=sparse_res.values.tolist()
+            )
+
+            response = self.client.query_points(
+                collection_name=self.collection_name,
+                prefetch=[
+                    qmodels.Prefetch(
+                        query=query_embedding,
+                        using="dense",
+                        filter=query_filter,
+                        score_threshold=self.dense_score_floor,
+                        limit=limit
+                    ),
+                    qmodels.Prefetch(
+                        query=sparse_query,
+                        using="sparse",
+                        filter=query_filter,
+                        score_threshold=self.sparse_score_floor,
+                        limit=limit
+                    ),
+                ],
+                query=qmodels.FusionQuery(fusion=qmodels.Fusion.RRF),
+                limit=top_k,
+                with_payload=True
+            )
+
+            if not response.points:
+                logger.info(
+                    f"Retriever abstained on Qdrant server: no candidates met dynamic floors "
+                    f"(Dense: {self.dense_score_floor}, Sparse: {self.sparse_score_floor}) for query '{query[:50]}'"
+                )
+                return []
+
+            results: List[DocumentChunk] = []
+            for hit in response.points:
+                payload = hit.payload or {}
+                chunk_id = payload.get("chunk_id", str(hit.id))
+                chunk_meta = ChunkMetadata(
+                    chunk_id=chunk_id,
+                    source_id=payload.get("source_id", ""),
+                    doc_title=payload.get("doc_title", ""),
+                    locator=payload.get("locator", ""),
+                    product_line=payload.get("product_line"),
+                    is_archived=bool(payload.get("is_archived", False)),
+                    effective_date=payload.get("effective_date"),
+                    version=payload.get("version"),
+                    header_path=payload.get("header_path", []),
+                    sha256=payload.get("sha256", ""),
+                )
+                results.append(DocumentChunk(text=payload.get("text", ""), metadata=chunk_meta))
+
+            return results
+        except Exception as e:
+            logger.warning(f"Server-side Qdrant hybrid query fallback due to: {e}")
+
+        # Fallback to local in-app BM25 + dense if server-side hybrid call fails
         dense_points = []
         try:
-            if hasattr(self.client, "query_points"):
-                response = self.client.query_points(
-                    collection_name=self.collection_name,
-                    query=query_embedding,
-                    query_filter=query_filter,
-                    limit=limit,
-                    with_payload=True
-                )
-                dense_points = response.points
-            else:
-                dense_points = self.client.search(
-                    collection_name=self.collection_name,
-                    query_vector=query_embedding,
-                    query_filter=query_filter,
-                    limit=limit,
-                    with_payload=True
-                )
+            response = self.client.query_points(
+                collection_name=self.collection_name,
+                query=query_embedding,
+                using="dense",
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=True
+            )
+            dense_points = response.points
         except Exception as e:
             logger.error(f"Error querying dense index in Qdrant: {e}")
 
-        # 3. Abstention gate on raw per-track scores (before fusion, see docstring)
         best_dense = max((hit.score for hit in dense_points), default=0.0)
         best_bm25 = bm25_candidates[0][0] if bm25_candidates else 0.0
-        # The gating. RRF gets rank position, not quality of match. 
-        # RRF always returns a rank 1, might skew scores.
-        # Prevent hallucination
-        if best_dense < DENSE_SCORE_FLOOR and best_bm25 < BM25_SCORE_FLOOR:
+
+        if best_dense < self.dense_score_floor and best_bm25 < self.sparse_score_floor:
             logger.info(
-                f"Retriever abstained: best dense {best_dense:.3f} < {DENSE_SCORE_FLOOR} and "
-                f"best BM25 {best_bm25:.3f} < {BM25_SCORE_FLOOR} for query '{query[:50]}'"
+                f"Retriever abstained: best dense {best_dense:.3f} < {self.dense_score_floor} and "
+                f"best BM25 {best_bm25:.3f} < {self.sparse_score_floor} for query '{query[:50]}'"
             )
             return []
 
-        # 4. Reciprocal Rank Fusion (RRF)
         rrf_k = 60.0
         rrf_scores: Dict[str, float] = {}
         chunk_map: Dict[str, DocumentChunk] = {}
 
-        # Dense ranks
         for rank, hit in enumerate(dense_points, start=1):
             payload = hit.payload or {}
             chunk_id = payload.get("chunk_id", str(hit.id))
@@ -309,17 +365,14 @@ class HybridRetriever:
                 )
                 chunk_map[chunk_id] = DocumentChunk(text=payload.get("text", ""), metadata=chunk_meta)
 
-        # BM25 ranks
         for rank, (bm25_score, chunk) in enumerate(bm25_candidates, start=1):
             cid = chunk.metadata.chunk_id
             rrf_scores[cid] = rrf_scores.get(cid, 0.0) + (1.0 / (rrf_k + rank))
             if cid not in chunk_map:
                 chunk_map[cid] = chunk
 
-        # 5. Rank fusion and cut-off
         ranked = sorted(rrf_scores.items(), key=lambda x: x[1], reverse=True)
         results: List[DocumentChunk] = []
-
         for cid, score in ranked:
             if score >= score_threshold and cid in chunk_map:
                 results.append(chunk_map[cid])

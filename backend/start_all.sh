@@ -32,6 +32,15 @@ done
 
 echo "PostgreSQL and Qdrant are ready."
 
-# 3. Start FastAPI Server
+# 3. Ingest corpus into Qdrant if collection is empty or uninitialized
+POINTS=$(curl -s http://localhost:6333/collections/orbitmesh_knowledge | grep -o '"points_count":[0-9]*' | cut -d: -f2 || echo 0)
+if [ -z "$POINTS" ] || [ "$POINTS" -le 1 ]; then
+    echo "Qdrant collection empty or uninitialized. Ingesting knowledge corpus..."
+    "$PROJECT_ROOT/scripts/ingest.sh"
+else
+    echo "Corpus already ingested ($POINTS points found in Qdrant). Skipping ingestion."
+fi
+
+# 4. Start FastAPI Server
 echo "Starting FastAPI server..."
 exec "$SCRIPT_DIR/start_api.sh"

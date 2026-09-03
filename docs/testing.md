@@ -104,6 +104,13 @@ cd frontend && npm test
 | `displays an error message when the API request fails` | `App.jsx` | API network error simulated | User-friendly error banner renders gracefully without crashing | Error Handling |
 | `toggles sidebar collapse state when sidebar button is clicked` | `App.jsx` | User clicks toggle icon | Sidebar transitions between expanded and collapsed mini-rail | UI Navigation |
 | `clears active conversation and starts a new session on New Chat click` | `App.jsx` | User clicks "+ New Chat" | Active messages clear, fresh session generated, welcome screen returns | Session Management |
+| `submits query when Enter key is pressed without Shift` | `App.jsx` | User presses Enter in input textarea | Submits message, calls `sendMessage`, renders assistant reply | Keyboard Accessibility |
+| `does not submit query when Shift+Enter is pressed` | `App.jsx` | User presses Shift+Enter in input textarea | Preserves multi-line draft text without triggering API submission | Keyboard Accessibility |
+| `disables send button when input is empty or whitespace-only` | `App.jsx` | Empty or whitespace input string | Send button disabled state enforced | Form Validation |
+| `disables input and send button while request is in flight` | `App.jsx` | API request pending resolution | Input and Send button disabled, preventing duplicate submissions | Async Concurrency |
+| `switches between multiple conversations in sidebar` | `App.jsx` | User clicks past session in sidebar | Active session switches, displaying correct conversational context | Session Management |
+| `deletes a conversation from the sidebar` | `App.jsx` | User clicks trash delete icon on session item | Targeted session removed from sidebar list and state | Session Management |
+| `loads existing sessions from localStorage on initial mount` | `App.jsx` | Initial render with populated `orbitmesh_chat_sessions` | Pre-existing chat history and session titles hydrated from localStorage | Storage Persistence |
 
 ---
 

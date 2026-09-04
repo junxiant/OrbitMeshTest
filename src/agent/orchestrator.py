@@ -1,5 +1,6 @@
 from __future__ import annotations
 import re
+import threading
 from typing import Optional
 
 from src.core.models import ResponseEnvelope, ActionEnum, Citation
@@ -16,8 +17,23 @@ class OrbitMeshOrchestrator:
         self.retriever = retriever or HybridRetriever()
         self.llm = llm or LLMClient()
         self.session_manager = SessionStateManager
-        self.last_retrieved_chunks = []
-        self.last_raw_envelope: Optional[ResponseEnvelope] = None
+        self._local = threading.local()
+
+    @property
+    def last_retrieved_chunks(self) -> list:
+        return getattr(self._local, "last_retrieved_chunks", [])
+
+    @last_retrieved_chunks.setter
+    def last_retrieved_chunks(self, val: list) -> None:
+        self._local.last_retrieved_chunks = val
+
+    @property
+    def last_raw_envelope(self) -> Optional[ResponseEnvelope]:
+        return getattr(self._local, "last_raw_envelope", None)
+
+    @last_raw_envelope.setter
+    def last_raw_envelope(self, val: Optional[ResponseEnvelope]) -> None:
+        self._local.last_raw_envelope = val
 
     def process_turn(self, session_id: str, user_message: str) -> ResponseEnvelope:
         self.last_retrieved_chunks = []

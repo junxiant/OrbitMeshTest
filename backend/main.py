@@ -126,7 +126,7 @@ def process_chat(request: ChatRequest, _: Optional[str] = Depends(verify_api_key
         logger.error(f"Orchestrator processing failed for session '{session_id}': {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Internal server error occurred while processing the request",
+            detail="Orchestrator processing failed",
         )
 
     citations = [

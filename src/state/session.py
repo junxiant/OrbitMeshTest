@@ -1,8 +1,10 @@
 from __future__ import annotations
 import json
+import os
 import sqlite3
+import threading
 import time
-from contextlib import closing
+from contextlib import closing, contextmanager
 from pathlib import Path
 from typing import Optional, Any, List, Union
 
@@ -17,63 +19,93 @@ _UNSET = object()
 class SessionStateManager:
     _db_path: Path = SQLITE_DB_PATH
     _initialized: bool = False
+    _init_lock: threading.Lock = threading.Lock()
+    _pg_pool: Optional[Any] = None
+    _use_postgres: bool = False
 
     @classmethod
     def is_postgres(cls) -> bool:
-        return DB_BACKEND == "postgres" and bool(DATABASE_URL)
+        return DB_BACKEND == "postgres" and bool(DATABASE_URL) and cls._use_postgres
+
+    @classmethod
+    @contextmanager
+    def _get_pg_conn(cls):
+        if cls._pg_pool is None:
+            raise RuntimeError("PostgreSQL connection pool is not initialized")
+        conn = cls._pg_pool.getconn()
+        try:
+            yield conn
+        finally:
+            cls._pg_pool.putconn(conn)
 
     @classmethod
     def _init_db_once(cls) -> None:
         if cls._initialized:
             return
-        if cls.is_postgres():
-            try:
-                import psycopg2
-                with closing(psycopg2.connect(DATABASE_URL)) as conn:
-                    with conn:
-                        with conn.cursor() as cur:
-                            cur.execute("""
-                                CREATE TABLE IF NOT EXISTS sessions (
-                                    session_id VARCHAR(255) PRIMARY KEY,
-                                    identified_model VARCHAR(255),
-                                    attempted_steps TEXT,
-                                    pending_confirmation VARCHAR(255),
-                                    dialogue_window TEXT,
-                                    created_at DOUBLE PRECISION,
-                                    updated_at DOUBLE PRECISION,
-                                    reported_issue TEXT,
-                                    confirmed_facts TEXT,
-                                    turns_count INTEGER DEFAULT 0,
-                                    is_escalated INTEGER DEFAULT 0,
-                                    is_resolved INTEGER DEFAULT 0
-                                );
-                            """)
-                cls._initialized = True
-                logger.info(f"Initialized PostgreSQL session storage: {DATABASE_URL}")
+        with cls._init_lock:
+            if cls._initialized:
                 return
-            except Exception as e:
-                logger.warning(f"Failed to connect to PostgreSQL ({e}). Falling back to SQLite at {cls._db_path}")
-
-        cls._db_path.parent.mkdir(parents=True, exist_ok=True)
-        with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
-            with conn:
-                conn.execute("""
-                    CREATE TABLE IF NOT EXISTS sessions (
-                        session_id TEXT PRIMARY KEY,
-                        identified_model TEXT,
-                        attempted_steps TEXT,
-                        pending_confirmation TEXT,
-                        dialogue_window TEXT,
-                        created_at REAL,
-                        updated_at REAL,
-                        reported_issue TEXT,
-                        confirmed_facts TEXT,
-                        turns_count INTEGER DEFAULT 0,
-                        is_escalated INTEGER DEFAULT 0,
-                        is_resolved INTEGER DEFAULT 0
+            if DB_BACKEND == "postgres" and bool(DATABASE_URL):
+                try:
+                    from psycopg2 import pool
+                    cls._pg_pool = pool.ThreadedConnectionPool(
+                        minconn=1,
+                        maxconn=int(os.getenv("DB_POOL_MAX", "10")),
+                        dsn=DATABASE_URL,
                     )
-                """)
-        cls._initialized = True
+                    with cls._get_pg_conn() as conn:
+                        with conn:
+                            with conn.cursor() as cur:
+                                cur.execute("""
+                                    CREATE TABLE IF NOT EXISTS sessions (
+                                        session_id VARCHAR(255) PRIMARY KEY,
+                                        identified_model VARCHAR(255),
+                                        attempted_steps TEXT,
+                                        pending_confirmation VARCHAR(255),
+                                        dialogue_window TEXT,
+                                        created_at DOUBLE PRECISION,
+                                        updated_at DOUBLE PRECISION,
+                                        reported_issue TEXT,
+                                        confirmed_facts TEXT,
+                                        turns_count INTEGER DEFAULT 0,
+                                        is_escalated INTEGER DEFAULT 0,
+                                        is_resolved INTEGER DEFAULT 0
+                                    );
+                                """)
+                    cls._use_postgres = True
+                    cls._initialized = True
+                    logger.info(f"Initialized PostgreSQL session storage with ThreadedConnectionPool: {DATABASE_URL}")
+                    return
+                except Exception as e:
+                    cls._use_postgres = False
+                    if cls._pg_pool:
+                        try:
+                            cls._pg_pool.closeall()
+                        except Exception:
+                            pass
+                        cls._pg_pool = None
+                    logger.warning(f"Failed to connect to PostgreSQL ({e}). Falling back to SQLite at {cls._db_path}")
+
+            cls._db_path.parent.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(str(cls._db_path), timeout=30.0, check_same_thread=False)) as conn:
+                with conn:
+                    conn.execute("""
+                        CREATE TABLE IF NOT EXISTS sessions (
+                            session_id TEXT PRIMARY KEY,
+                            identified_model TEXT,
+                            attempted_steps TEXT,
+                            pending_confirmation TEXT,
+                            dialogue_window TEXT,
+                            created_at REAL,
+                            updated_at REAL,
+                            reported_issue TEXT,
+                            confirmed_facts TEXT,
+                            turns_count INTEGER DEFAULT 0,
+                            is_escalated INTEGER DEFAULT 0,
+                            is_resolved INTEGER DEFAULT 0
+                        )
+                    """)
+            cls._initialized = True
 
     @classmethod
     def _row_to_state(cls, row: Union[sqlite3.Row, dict]) -> SessionState:
@@ -102,23 +134,22 @@ class SessionStateManager:
         cls._init_db_once()
         if cls.is_postgres():
             try:
-                import psycopg2
                 from psycopg2.extras import RealDictCursor
-                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                with cls._get_pg_conn() as conn:
                     with conn.cursor(cursor_factory=RealDictCursor) as cur:
                         cur.execute("SELECT * FROM sessions WHERE session_id = %s", (session_id,))
                         row = cur.fetchone()
                         if row is not None:
                             return cls._row_to_state(row)
             except Exception as e:
-                logger.error(f"Error fetching session from PostgreSQL: {e}")
-        else:
-            with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
-                conn.row_factory = sqlite3.Row
-                cursor = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
-                row = cursor.fetchone()
-                if row is not None:
-                    return cls._row_to_state(row)
+                logger.error(f"Error fetching session from PostgreSQL: {e}. Falling back to SQLite.")
+
+        with closing(sqlite3.connect(str(cls._db_path), timeout=30.0, check_same_thread=False)) as conn:
+            conn.row_factory = sqlite3.Row
+            cursor = conn.execute("SELECT * FROM sessions WHERE session_id = ?", (session_id,))
+            row = cursor.fetchone()
+            if row is not None:
+                return cls._row_to_state(row)
 
         new_state = SessionState(session_id=session_id)
         cls.update_session(new_state)
@@ -228,8 +259,7 @@ class SessionStateManager:
 
         if cls.is_postgres():
             try:
-                import psycopg2
-                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                with cls._get_pg_conn() as conn:
                     with conn:
                         with conn.cursor() as cur:
                             cur.execute("""
@@ -252,9 +282,9 @@ class SessionStateManager:
                             """, params)
                 return
             except Exception as e:
-                logger.error(f"Error updating session in PostgreSQL: {e}")
+                logger.error(f"Error updating session in PostgreSQL: {e}. Falling back to SQLite.")
 
-        with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
+        with closing(sqlite3.connect(str(cls._db_path), timeout=30.0, check_same_thread=False)) as conn:
             with conn:
                 conn.execute("""
                     INSERT INTO sessions (
@@ -280,16 +310,15 @@ class SessionStateManager:
         cls._init_db_once()
         if cls.is_postgres():
             try:
-                import psycopg2
-                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                with cls._get_pg_conn() as conn:
                     with conn:
                         with conn.cursor() as cur:
                             cur.execute("DELETE FROM sessions WHERE session_id = %s", (session_id,))
                 return
             except Exception as e:
-                logger.error(f"Error deleting session from PostgreSQL: {e}")
+                logger.error(f"Error deleting session from PostgreSQL: {e}. Falling back to SQLite.")
 
-        with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
+        with closing(sqlite3.connect(str(cls._db_path), timeout=30.0, check_same_thread=False)) as conn:
             with conn:
                 conn.execute("DELETE FROM sessions WHERE session_id = ?", (session_id,))
 
@@ -298,16 +327,15 @@ class SessionStateManager:
         cls._init_db_once()
         if cls.is_postgres():
             try:
-                import psycopg2
-                with closing(psycopg2.connect(DATABASE_URL)) as conn:
+                with cls._get_pg_conn() as conn:
                     with conn:
                         with conn.cursor() as cur:
                             cur.execute("DELETE FROM sessions")
                 return
             except Exception as e:
-                logger.error(f"Error resetting sessions in PostgreSQL: {e}")
+                logger.error(f"Error resetting sessions in PostgreSQL: {e}. Falling back to SQLite.")
 
-        with closing(sqlite3.connect(str(cls._db_path), check_same_thread=False)) as conn:
+        with closing(sqlite3.connect(str(cls._db_path), timeout=30.0, check_same_thread=False)) as conn:
             with conn:
                 conn.execute("DELETE FROM sessions")
 

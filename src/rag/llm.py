@@ -2,6 +2,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 import time
 
 from openai import OpenAI
@@ -196,6 +197,7 @@ class LLMClient:
         # "openrouter" is the legacy config name for live mode.
         self.mode = "live" if LLM_MODE == "openrouter" else LLM_MODE
         self.client: OpenAI | None = None
+        self._rate_limit_lock = threading.Lock()
         self.last_call_time = 0.0
         self.rate_limit_delay = LLM_RATE_LIMIT_DELAY
         self.fallback_models = OPENROUTER_FALLBACK_MODELS
@@ -303,15 +305,18 @@ Rules:
             logger.error("No OpenRouter client available for live call.")
             return None, ""
 
-        elapsed = time.time() - self.last_call_time
-        if elapsed < self.rate_limit_delay:
-            sleep_duration = self.rate_limit_delay - elapsed
-            logger.debug(f"Rate limit buffer: sleeping for {sleep_duration:.2f}s before LLM call")
-            time.sleep(sleep_duration)
+        with self._rate_limit_lock:
+            elapsed = time.time() - self.last_call_time
+            if elapsed < self.rate_limit_delay:
+                sleep_duration = self.rate_limit_delay - elapsed
+                logger.debug(f"Rate limit buffer: sleeping for {sleep_duration:.2f}s before LLM call")
+                time.sleep(sleep_duration)
+            self.last_call_time = time.time()
 
         for model_candidate in self.fallback_models:
             try:
-                self.last_call_time = time.time()
+                with self._rate_limit_lock:
+                    self.last_call_time = time.time()
                 resp = self.client.chat.completions.create(
                     model=model_candidate,
                     messages=messages,

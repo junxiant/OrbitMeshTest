@@ -16,6 +16,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from src.agent.orchestrator import OrbitMeshOrchestrator
 from src.core.config import ensure_dirs
+from src.core.logging import logger
 
 ensure_dirs()
 
@@ -26,13 +27,25 @@ app = FastAPI(
 )
 
 # CORS configuration
-allowed_origins_raw = os.getenv("CORS_ORIGINS", "*")
-allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
+default_origins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://localhost:80",
+    "http://127.0.0.1:80",
+]
+allowed_origins_raw = os.getenv("CORS_ORIGINS", "")
+if allowed_origins_raw.strip():
+    allowed_origins = [o.strip() for o in allowed_origins_raw.split(",") if o.strip()]
+else:
+    allowed_origins = default_origins
+
+is_wildcard = "*" in allowed_origins
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins if allowed_origins else ["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=not is_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -42,7 +55,14 @@ api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 
 def get_configured_api_key() -> str:
-    return os.getenv("API_KEY", os.getenv("ORBITMESH_API_KEY", "orbitmesh-secret-key"))
+    key = os.getenv("API_KEY", os.getenv("ORBITMESH_API_KEY", "")).strip()
+    if is_auth_required() and not key:
+        logger.error("REQUIRE_API_KEY is enabled, but neither API_KEY nor ORBITMESH_API_KEY is set.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Server API key authentication is misconfigured",
+        )
+    return key
 
 
 def is_auth_required() -> bool:
@@ -103,9 +123,10 @@ def process_chat(request: ChatRequest, _: Optional[str] = Depends(verify_api_key
     try:
         envelope = orchestrator.process_turn(session_id, request.message)
     except Exception as e:
+        logger.error(f"Orchestrator processing failed for session '{session_id}': {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Orchestrator processing failed: {e}",
+            detail="Internal server error occurred while processing the request",
         )
 
     citations = [

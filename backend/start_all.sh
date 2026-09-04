@@ -10,7 +10,7 @@ echo "=== Starting Full OrbitMesh Backend Services ==="
 
 # 1. Start Qdrant and PostgreSQL containers
 echo "Starting PostgreSQL and Qdrant containers..."
-docker compose up -d --build
+docker compose up -d --build qdrant postgres adminer
 
 # 2. Wait for PostgreSQL and Qdrant to be ready
 echo "Waiting for services to be ready..."

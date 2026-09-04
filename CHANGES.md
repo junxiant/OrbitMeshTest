@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-09-04]
+
+### Fixed
+- **Security & Authentication Hardening (`backend/main.py`)**:
+  - Replaced wildcard `*` CORS credentials with explicit local frontend origins (`localhost:5173`, `127.0.0.1:5173`, `localhost:3000`, `localhost:80`, `127.0.0.1:80`) and dynamic credential disabling on wildcard origins to comply with Fetch CORS specifications.
+  - Removed default fallback API key `"orbitmesh-secret-key"`; enforced error logging and HTTP 500 when `REQUIRE_API_KEY=true` but no key is configured in the environment.
+  - Sanitized HTTP 500 error responses to `"Orchestrator processing failed"` while preserving full server-side trace logging with `logger.error(..., exc_info=True)` to prevent internal information leakage.
+- **Concurrency & Thread Safety (`src/agent/orchestrator.py`, `src/rag/llm.py`, `src/state/session.py`)**:
+  - Replaced direct instance mutation of `last_retrieved_chunks` and `last_raw_envelope` in `OrbitMeshOrchestrator` with `threading.local()` properties to isolate per-request retrieval state across concurrent FastAPI worker threads.
+  - Added a `threading.Lock()` to `LLMClient` protecting rate-limit buffer checks and `last_call_time` updates to avoid race conditions against external model providers.
+  - Implemented `psycopg2.pool.ThreadedConnectionPool` in `SessionStateManager` for PostgreSQL connection reuse and thread safety.
+  - Added `_init_lock` to prevent concurrent database schema initialization races.
+  - Implemented automatic fallback to SQLite upon any PostgreSQL connection or query failure to prevent session state loss.
+  - Configured SQLite connection timeout to 30.0 seconds to prevent database locking errors under concurrent workloads.
+- **Container Infrastructure & Nginx Resolution (`frontend/nginx.conf`, `docker-compose.yml`, `backend/start_all.sh`)**:
+  - Configured Docker DNS resolver (`resolver 127.0.0.11 valid=30s ipv6=off;`) and dynamic upstream variable (`set $backend_upstream "http://backend:8000";`) in `frontend/nginx.conf` to prevent Nginx startup crashes when the backend container starts asynchronously.
+  - Added `backend` and `frontend` service definitions to `docker-compose.yml` to allow full stack container orchestration on a shared network.
+  - Scoped container startup in `backend/start_all.sh` to `qdrant postgres adminer` to prevent port 8000 conflicts with the local Uvicorn development server.
+
 ## [2026-09-03]
 
 ### Added

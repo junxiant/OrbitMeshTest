@@ -14,6 +14,7 @@ The project includes web application layers in addition to the core CLI orchestr
   - Containerization with Docker and Nginx.
   - Deployment instructions for AWS Amplify.
   - *Full guide*: See [`frontend/README.md`](frontend/README.md).
+  - Note: Perhaps add an API Gateway layer.
 
 - **Backend Service ([`backend/`](backend/))**:
   - FastAPI REST service exposing `POST /api/chat` and `GET /api/health`.

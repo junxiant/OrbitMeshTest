@@ -147,3 +147,8 @@ The project maintains comprehensive test suites across all layers, documented in
 ### 7. AI Tools Used
 
 - **Google Antigravity IDE (Gemini Coding Agent)**: Used for architecture scaffolding, full-stack implementation, server-side Qdrant hybrid retrieval migration, automated dynamic calibration, PostgreSQL storage integration, test suite expansion, and documentation maintenance.
+
+### 8. Areas for Improvement
+- Adding an API Gateway
+- Using Semantic Caching for queries asking for same solution, but phrased differently
+- Use Contextual Chunking for higher accuracy

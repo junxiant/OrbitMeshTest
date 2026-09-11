@@ -13,10 +13,11 @@
   - Added `process_turn_stream` async generator emitting structured SSE events (`start`, `delta`, `replace`, `citations`, `done`) with safety guardrail evaluation and post-stream citation validation.
 - **Server-Sent Events (SSE) Streaming API (`backend/main.py`)**:
   - Added `POST /api/chat/stream` endpoint returning `StreamingResponse(..., media_type="text/event-stream")`.
-  - Converted `POST /api/chat` to `async def` maintaining backward compatibility for non-streaming clients.
-- **Frontend Real-Time Token Streaming (`frontend/src/api.js`, `frontend/src/App.jsx`, `frontend/src/App.css`)**:
-  - Added `streamMessage` using `ReadableStreamDefaultReader` to consume and decode SSE packets.
-  - Updated chat UI to render incoming assistant tokens progressively with an animated cursor indicator.
+  - Preserved synchronous `POST /api/chat` calling `orchestrator.process_turn` for backward compatibility with synchronous callers and test suites.
+- **Frontend Real-Time Token Streaming & Animated Feedback (`frontend/src/api.js`, `frontend/src/App.jsx`, `frontend/src/App.css`)**:
+  - Added `streamMessage` using `ReadableStreamDefaultReader` supporting CRLF/LF packet parsing and trailing buffer flushes.
+  - Fixed React 18 state batching race in `App.jsx` using atomic message existence checks.
+  - Added real-time pipeline status telemetry (`Searching OrbitMesh documentation...` -> `Generating diagnostic response...`) with an animated 3-dot pulse indicator and streaming cursor.
 
 
 ## [2026-09-04]

@@ -1,7 +1,8 @@
 import pytest
 from pathlib import Path
 from src.core.models import SessionState, ChatMessage, ConfirmationType, ActionEnum
-from src.state.session import SessionStateManager
+from src.state.session import SessionStateManager, SessionConcurrencyError
+import time
 from src.agent.orchestrator import OrbitMeshOrchestrator
 
 
@@ -117,3 +118,70 @@ def test_turn_count_and_lifecycle_flags_persistence():
     assert s2.turns_count == 2
     assert s2.is_resolved is True
     assert len(s2.dialogue_window) == 4
+
+
+def test_optimistic_locking_collision_detection():
+    """Verify that updating with a stale version raises SessionConcurrencyError."""
+    session_id = "test-collision-1"
+    SessionStateManager.get_or_create(session_id)
+
+    snap_a = SessionStateManager.get_or_create(session_id)
+    snap_b = SessionStateManager.get_or_create(session_id)
+    assert snap_a.version == snap_b.version
+
+    snap_a.identified_model = "OrbitMesh R1"
+    SessionStateManager.update_session(snap_a, check_version=True)
+    assert snap_a.version > snap_b.version
+
+    snap_b.identified_model = "OrbitMesh Pro"
+    with pytest.raises(SessionConcurrencyError):
+        SessionStateManager.update_session(snap_b, check_version=True)
+
+
+def test_concurrent_turn_recording_merges_dialogue():
+    """Verify record_turn retries and preserves both turns under concurrent execution."""
+    session_id = "test-concurrent-merge"
+    s = SessionStateManager.get_or_create(session_id)
+
+    # Simulate two independent turns processing simultaneously from the initial snapshot
+    s1 = SessionStateManager.get_or_create(session_id)
+    s2 = SessionStateManager.get_or_create(session_id)
+
+    SessionStateManager.record_turn(s1, "Query 1", "Answer 1", step_executed="step_1")
+    SessionStateManager.record_turn(s2, "Query 2", "Answer 2", step_executed="step_2")
+
+    final_state = SessionStateManager.get_or_create(session_id)
+    # Both turns must be present in the dialogue history
+    contents = [m.content for m in final_state.dialogue_window]
+    assert "Query 1" in contents
+    assert "Answer 1" in contents
+    assert "Query 2" in contents
+    assert "Answer 2" in contents
+    assert "step_1" in final_state.attempted_steps
+    assert "step_2" in final_state.attempted_steps
+    assert final_state.turns_count >= 2
+
+
+def test_delete_expired_sessions():
+    """Verify that sessions older than ttl_days are purged while active sessions remain."""
+    fresh_id = "test-fresh-session"
+    expired_id = "test-expired-session"
+
+    s_fresh = SessionStateManager.get_or_create(fresh_id)
+    s_expired = SessionStateManager.get_or_create(expired_id)
+
+    # Backdate expired session to 45 days ago
+    s_expired.updated_at = time.time() - (45 * 86400.0)
+    SessionStateManager.update_session(s_expired, check_version=False)
+
+    deleted = SessionStateManager.delete_expired_sessions(ttl_days=30)
+    assert deleted >= 1
+
+    # Fresh session still exists
+    with_fresh = SessionStateManager.get_or_create(fresh_id)
+    assert with_fresh.session_id == fresh_id
+
+    # Expired session was cleared (fetching it creates a new empty state)
+    with_recreated = SessionStateManager.get_or_create(expired_id)
+    assert with_recreated.turns_count == 0
+    assert with_recreated.dialogue_window == []

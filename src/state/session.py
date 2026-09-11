@@ -89,7 +89,7 @@ class SessionStateManager:
             cls._db_path.parent.mkdir(parents=True, exist_ok=True)
             with closing(sqlite3.connect(str(cls._db_path), timeout=30.0, check_same_thread=False)) as conn:
                 with conn:
-                    conn.execute("""
+                    conn.executescript("""
                         CREATE TABLE IF NOT EXISTS sessions (
                             session_id TEXT PRIMARY KEY,
                             identified_model TEXT,

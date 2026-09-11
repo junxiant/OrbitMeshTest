@@ -43,8 +43,7 @@ LLM_MODE = _raw_llm_mode
 OPENROUTER_MODEL = os.getenv('OPENROUTER_MODEL', 'nvidia/nemotron-3.5-lightning:free')
 OPENROUTER_FALLBACK_MODELS = [
     OPENROUTER_MODEL,
-    'liquid/lfm-2.5-2.6b:free',
-    'z-ai/glm-5.2:free',
+    'nvidia/nemotron-3-super-120b-a12b:free',
     'nvidia/nemotron-3-ultra-550b-a55b:free',
     'nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free',
 

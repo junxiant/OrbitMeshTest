@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { sendMessage } from './api';
+import { sendMessage, streamMessage } from './api';
 import './App.css';
 
 function generateSessionId() {
@@ -91,6 +91,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [agentStatus, setAgentStatus] = useState('Assistant is analyzing...');
   const [error, setError] = useState(null);
 
   const messagesEndRef = useRef(null);
@@ -184,54 +185,124 @@ export default function App() {
 
     setInput('');
     setLoading(true);
+    setAgentStatus('Assistant is analyzing...');
     setError(null);
 
+    const assistantMsgId = 'assistant-' + Date.now();
+
     try {
-      const data = await sendMessage(activeSessionId, textToSend);
-
-      const assistantMessage = {
-        id: 'assistant-' + Date.now(),
-        sender: 'assistant',
-        text: data.response || 'No response returned.',
-        citations: data.citations || [],
-        action: data.action || 'instruct',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id === activeSessionId) {
-            return {
-              ...s,
-              messages: [...s.messages, assistantMessage],
-            };
-          }
-          return s;
-        })
-      );
+      await streamMessage(activeSessionId, textToSend, {
+        onStatus: (statusText) => {
+          setAgentStatus(statusText);
+        },
+        onChunk: (delta, isReplace) => {
+          setLoading(false);
+          setSessions((prev) =>
+            prev.map((s) => {
+              if (s.id !== activeSessionId) return s;
+              const exists = s.messages.some((m) => m.id === assistantMsgId);
+              if (!exists) {
+                const newMsg = {
+                  id: assistantMsgId,
+                  sender: 'assistant',
+                  text: delta,
+                  citations: [],
+                  action: null,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  isStreaming: true,
+                };
+                return { ...s, messages: [...s.messages, newMsg] };
+              }
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== assistantMsgId) return m;
+                  return {
+                    ...m,
+                    text: isReplace ? delta : m.text + delta,
+                  };
+                }),
+              };
+            })
+          );
+        },
+        onCitations: (citations) => {
+          setSessions((prev) =>
+            prev.map((s) => {
+              if (s.id !== activeSessionId) return s;
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== assistantMsgId) return m;
+                  return { ...m, citations: citations || [] };
+                }),
+              };
+            })
+          );
+        },
+        onDone: (doneData) => {
+          setLoading(false);
+          setSessions((prev) =>
+            prev.map((s) => {
+              if (s.id !== activeSessionId) return s;
+              const exists = s.messages.some((m) => m.id === assistantMsgId);
+              if (!exists) {
+                const newMsg = {
+                  id: assistantMsgId,
+                  sender: 'assistant',
+                  text: doneData.response || '',
+                  citations: doneData.citations || [],
+                  action: doneData.action || 'instruct',
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  isStreaming: false,
+                };
+                return { ...s, messages: [...s.messages, newMsg] };
+              }
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== assistantMsgId) return m;
+                  return {
+                    ...m,
+                    text: doneData.response || m.text,
+                    action: doneData.action || 'instruct',
+                    citations: (m.citations && m.citations.length > 0) ? m.citations : (doneData.citations || []),
+                    isStreaming: false,
+                  };
+                }),
+              };
+            })
+          );
+        },
+        onError: (err) => {
+          setError(err.message || 'Stream connection error');
+          setLoading(false);
+          setSessions((prev) =>
+            prev.map((s) => {
+              if (s.id !== activeSessionId) return s;
+              const exists = s.messages.some((m) => m.id === assistantMsgId);
+              if (exists) return s;
+              return {
+                ...s,
+                messages: [
+                  ...s.messages,
+                  {
+                    id: 'error-' + Date.now(),
+                    sender: 'assistant',
+                    text: 'Error: Unable to connect to backend server. Ensure backend is running.',
+                    citations: [],
+                    action: 'error',
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  },
+                ],
+              };
+            })
+          );
+        },
+      });
     } catch (err) {
       setError(err.message || 'Failed to send message');
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id === activeSessionId) {
-            return {
-              ...s,
-              messages: [
-                ...s.messages,
-                {
-                  id: 'error-' + Date.now(),
-                  sender: 'assistant',
-                  text: 'Error: Unable to connect to backend server. Ensure backend is running.',
-                  citations: [],
-                  action: 'error',
-                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                },
-              ],
-            };
-          }
-          return s;
-        })
-      );
+      setLoading(false);
     } finally {
       setLoading(false);
     }
@@ -364,7 +435,10 @@ export default function App() {
                     <span className="message-time">{msg.timestamp}</span>
                   </div>
 
-                  <div className="message-content">{msg.text}</div>
+                  <div className="message-content">
+                    {msg.text}
+                    {msg.isStreaming && <span className="streaming-cursor" />}
+                  </div>
 
                   {msg.action && msg.sender === 'assistant' && (
                     <div className="message-action">
@@ -393,7 +467,14 @@ export default function App() {
             {loading && (
               <div className="message-row assistant">
                 <div className="message-bubble loading-bubble">
-                  <span>Assistant is analyzing...</span>
+                  <div className="loading-status-wrap">
+                    <span className="typing-indicator">
+                      <span className="dot" />
+                      <span className="dot" />
+                      <span className="dot" />
+                    </span>
+                    <span className="loading-text">{agentStatus}</span>
+                  </div>
                 </div>
               </div>
             )}

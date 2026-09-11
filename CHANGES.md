@@ -1,5 +1,25 @@
 # Changelog
 
+## [2026-09-11]
+
+### Changed
+- **Asynchronous LLM Client & Non-Blocking Scheduling (`src/rag/llm.py`)**:
+  - Removed in-process `threading.Lock()` and blocking `time.sleep()` in `LLMClient` to eliminate request serialization bottleneck across worker threads.
+  - Added `AsyncOpenAI` client for non-blocking asynchronous model invocations.
+  - Added `StreamJsonExtractor` state machine to parse and extract JSON response text deltas progressively in real time.
+  - Added `complete_async()` and `complete_stream()` methods with non-blocking rate limiting and async fallback cascades.
+- **Asynchronous Orchestrator Turn Pipeline (`src/agent/orchestrator.py`)**:
+  - Added `process_turn_async` running CPU/IO retrieval non-blockingly via `asyncio.to_thread`.
+  - Added `process_turn_stream` async generator emitting structured SSE events (`start`, `delta`, `replace`, `citations`, `done`) with safety guardrail evaluation and post-stream citation validation.
+- **Server-Sent Events (SSE) Streaming API (`backend/main.py`)**:
+  - Added `POST /api/chat/stream` endpoint returning `StreamingResponse(..., media_type="text/event-stream")`.
+  - Preserved synchronous `POST /api/chat` calling `orchestrator.process_turn` for backward compatibility with synchronous callers and test suites.
+- **Frontend Real-Time Token Streaming & Animated Feedback (`frontend/src/api.js`, `frontend/src/App.jsx`, `frontend/src/App.css`)**:
+  - Added `streamMessage` using `ReadableStreamDefaultReader` supporting CRLF/LF packet parsing and trailing buffer flushes.
+  - Fixed React 18 state batching race in `App.jsx` using atomic message existence checks.
+  - Added real-time pipeline status telemetry (`Searching OrbitMesh documentation...` -> `Generating diagnostic response...`) with an animated 3-dot pulse indicator and streaming cursor.
+
+
 ## [2026-09-04]
 
 ### Fixed

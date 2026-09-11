@@ -398,6 +398,8 @@ class OrbitMeshOrchestrator:
         model_str = session.identified_model or ""
         product_line_filter = "Pro" if "pro" in model_str.lower() else ("Standard" if any(x in model_str.lower() for x in ["r1", "n1"]) else None)
 
+        yield {"event": "status", "data": {"status": "Searching OrbitMesh documentation..."}}
+
         self.last_retrieved_chunks = []
         retrieved_chunks = await asyncio.to_thread(
             self.retriever.retrieve,
@@ -407,6 +409,8 @@ class OrbitMeshOrchestrator:
             include_archived=("archive" in msg_lower or "superseded" in msg_lower)
         )
         self.last_retrieved_chunks = retrieved_chunks
+
+        yield {"event": "status", "data": {"status": "Generating diagnostic response..."}}
 
         streamed_pieces = []
         final_envelope_candidate = None

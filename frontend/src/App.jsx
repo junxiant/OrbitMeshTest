@@ -91,6 +91,7 @@ export default function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [agentStatus, setAgentStatus] = useState('Assistant is analyzing...');
   const [error, setError] = useState(null);
 
   const messagesEndRef = useRef(null);
@@ -184,20 +185,23 @@ export default function App() {
 
     setInput('');
     setLoading(true);
+    setAgentStatus('Assistant is analyzing...');
     setError(null);
 
     const assistantMsgId = 'assistant-' + Date.now();
-    let hasCreatedAssistantMessage = false;
 
     try {
       await streamMessage(activeSessionId, textToSend, {
+        onStatus: (statusText) => {
+          setAgentStatus(statusText);
+        },
         onChunk: (delta, isReplace) => {
           setLoading(false);
           setSessions((prev) =>
             prev.map((s) => {
               if (s.id !== activeSessionId) return s;
-              if (!hasCreatedAssistantMessage) {
-                hasCreatedAssistantMessage = true;
+              const exists = s.messages.some((m) => m.id === assistantMsgId);
+              if (!exists) {
                 const newMsg = {
                   id: assistantMsgId,
                   sender: 'assistant',
@@ -241,18 +245,18 @@ export default function App() {
           setSessions((prev) =>
             prev.map((s) => {
               if (s.id !== activeSessionId) return s;
-              if (!hasCreatedAssistantMessage) {
-                hasCreatedAssistantMessage = true;
-                const fallbackMsg = {
+              const exists = s.messages.some((m) => m.id === assistantMsgId);
+              if (!exists) {
+                const newMsg = {
                   id: assistantMsgId,
                   sender: 'assistant',
                   text: doneData.response || '',
-                  citations: [],
+                  citations: doneData.citations || [],
                   action: doneData.action || 'instruct',
                   timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                   isStreaming: false,
                 };
-                return { ...s, messages: [...s.messages, fallbackMsg] };
+                return { ...s, messages: [...s.messages, newMsg] };
               }
               return {
                 ...s,
@@ -262,6 +266,7 @@ export default function App() {
                     ...m,
                     text: doneData.response || m.text,
                     action: doneData.action || 'instruct',
+                    citations: (m.citations && m.citations.length > 0) ? m.citations : (doneData.citations || []),
                     isStreaming: false,
                   };
                 }),
@@ -272,27 +277,27 @@ export default function App() {
         onError: (err) => {
           setError(err.message || 'Stream connection error');
           setLoading(false);
-          if (!hasCreatedAssistantMessage) {
-            setSessions((prev) =>
-              prev.map((s) => {
-                if (s.id !== activeSessionId) return s;
-                return {
-                  ...s,
-                  messages: [
-                    ...s.messages,
-                    {
-                      id: 'error-' + Date.now(),
-                      sender: 'assistant',
-                      text: 'Error: Unable to connect to backend server. Ensure backend is running.',
-                      citations: [],
-                      action: 'error',
-                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                    },
-                  ],
-                };
-              })
-            );
-          }
+          setSessions((prev) =>
+            prev.map((s) => {
+              if (s.id !== activeSessionId) return s;
+              const exists = s.messages.some((m) => m.id === assistantMsgId);
+              if (exists) return s;
+              return {
+                ...s,
+                messages: [
+                  ...s.messages,
+                  {
+                    id: 'error-' + Date.now(),
+                    sender: 'assistant',
+                    text: 'Error: Unable to connect to backend server. Ensure backend is running.',
+                    citations: [],
+                    action: 'error',
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  },
+                ],
+              };
+            })
+          );
         },
       });
     } catch (err) {
@@ -462,7 +467,14 @@ export default function App() {
             {loading && (
               <div className="message-row assistant">
                 <div className="message-bubble loading-bubble">
-                  <span>Assistant is analyzing...</span>
+                  <div className="loading-status-wrap">
+                    <span className="typing-indicator">
+                      <span className="dot" />
+                      <span className="dot" />
+                      <span className="dot" />
+                    </span>
+                    <span className="loading-text">{agentStatus}</span>
+                  </div>
                 </div>
               </div>
             )}

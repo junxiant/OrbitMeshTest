@@ -28,8 +28,42 @@ export async function sendMessage(sessionId, message) {
   return await response.json();
 }
 
+function processPacket(packet, callbacks) {
+  if (!packet || !packet.trim()) return;
+  const { onChunk, onCitations, onDone, onError, onStatus } = callbacks;
+  let event = 'message';
+  let data = '';
+
+  for (const line of packet.split(/\r?\n/)) {
+    if (line.startsWith('event: ')) {
+      event = line.substring(7).trim();
+    } else if (line.startsWith('data: ')) {
+      data = line.substring(6).trim();
+    }
+  }
+
+  if (!data) return;
+  try {
+    const parsed = JSON.parse(data);
+    if (event === 'status' && onStatus) {
+      onStatus(parsed.status);
+    } else if (event === 'delta' && onChunk) {
+      onChunk(parsed.delta);
+    } else if (event === 'replace' && onChunk) {
+      onChunk(parsed.response, true);
+    } else if (event === 'citations' && onCitations) {
+      onCitations(parsed.citations);
+    } else if (event === 'done' && onDone) {
+      onDone(parsed);
+    } else if (event === 'error' && onError) {
+      onError(new Error(parsed.error || 'Stream error'));
+    }
+  } catch (e) {
+    console.warn('Failed to parse SSE packet:', data, e);
+  }
+}
+
 export async function streamMessage(sessionId, message, callbacks) {
-  const { onChunk, onCitations, onDone, onError } = callbacks;
   const url = `${API_BASE_URL}/api/chat/stream`;
   const headers = {
     'Content-Type': 'application/json',
@@ -63,44 +97,20 @@ export async function streamMessage(sessionId, message, callbacks) {
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const packets = buffer.split('\n\n');
-      buffer = packets.pop();
+      const packets = buffer.split(/\r?\n\r?\n/);
+      buffer = packets.pop() || '';
 
       for (const packet of packets) {
-        if (!packet.trim()) continue;
-        let event = 'message';
-        let data = '';
-
-        for (const line of packet.split('\n')) {
-          if (line.startsWith('event: ')) {
-            event = line.substring(7).trim();
-          } else if (line.startsWith('data: ')) {
-            data = line.substring(6).trim();
-          }
-        }
-
-        if (!data) continue;
-        try {
-          const parsed = JSON.parse(data);
-          if (event === 'delta' && onChunk) {
-            onChunk(parsed.delta);
-          } else if (event === 'replace' && onChunk) {
-            onChunk(parsed.response, true);
-          } else if (event === 'citations' && onCitations) {
-            onCitations(parsed.citations);
-          } else if (event === 'done' && onDone) {
-            onDone(parsed);
-          } else if (event === 'error' && onError) {
-            onError(new Error(parsed.error || 'Stream error'));
-          }
-        } catch (e) {
-          console.warn('Failed to parse SSE packet:', data, e);
-        }
+        processPacket(packet, callbacks);
       }
     }
+
+    if (buffer.trim()) {
+      processPacket(buffer, callbacks);
+    }
   } catch (err) {
-    if (onError) {
-      onError(err);
+    if (callbacks.onError) {
+      callbacks.onError(err);
     } else {
       throw err;
     }

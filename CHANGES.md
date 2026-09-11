@@ -14,6 +14,12 @@
 - **Server-Sent Events (SSE) Streaming API (`backend/main.py`)**:
   - Added `POST /api/chat/stream` endpoint returning `StreamingResponse(..., media_type="text/event-stream")`.
   - Preserved synchronous `POST /api/chat` calling `orchestrator.process_turn` for backward compatibility with synchronous callers and test suites.
+- **Production Health & Readiness Probes (`backend/main.py`)**:
+  - Implemented `check_database_health()` probing active PostgreSQL connection (`SELECT 1;`) with automatic SQLite fallback verification.
+  - Implemented `check_qdrant_health()` executing shallow vector store connectivity checks with a 2-second timeout.
+  - Added `GET /api/health/live` returning HTTP 200 for process liveness monitoring.
+  - Added `GET /api/health/ready` deep readiness probe returning HTTP 200 or HTTP 503 based on critical dependency availability.
+  - Enriched `GET /api/health` with dependency telemetry while preserving backward compatibility with existing test suites.
 - **Frontend Real-Time Token Streaming & Animated Feedback (`frontend/src/api.js`, `frontend/src/App.jsx`, `frontend/src/App.css`)**:
   - Added `streamMessage` using `ReadableStreamDefaultReader` supporting CRLF/LF packet parsing and trailing buffer flushes.
   - Fixed React 18 state batching race in `App.jsx` using atomic message existence checks.

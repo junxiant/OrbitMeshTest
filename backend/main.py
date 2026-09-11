@@ -5,7 +5,10 @@ from pathlib import Path
 from typing import List, Optional
 
 import json
-from fastapi import Depends, FastAPI, HTTPException, Security, status
+import sqlite3
+from contextlib import closing
+import urllib.request
+from fastapi import Depends, FastAPI, HTTPException, Response, Security, status
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
@@ -17,8 +20,9 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.agent.orchestrator import OrbitMeshOrchestrator
-from src.core.config import ensure_dirs
+from src.core.config import ensure_dirs, DB_BACKEND, QDRANT_URL, QDRANT_PATH
 from src.core.logging import logger
+from src.state.session import SessionStateManager
 
 ensure_dirs()
 
@@ -107,12 +111,91 @@ class ChatResponse(BaseModel):
     action: str
 
 
+def check_database_health() -> tuple[bool, dict]:
+    """Verify database connection viability."""
+    try:
+        if SessionStateManager.is_postgres():
+            with SessionStateManager._get_pg_conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1;")
+                    cur.fetchone()
+            return True, {"backend": "postgres", "status": "connected"}
+        else:
+            db_path = SessionStateManager._db_path
+            db_path.parent.mkdir(parents=True, exist_ok=True)
+            with closing(sqlite3.connect(str(db_path), timeout=5.0)) as conn:
+                with conn:
+                    conn.execute("SELECT 1;")
+            return True, {"backend": "sqlite", "status": "connected"}
+    except Exception as e:
+        logger.warning(f"Database health check probe failed: {e}")
+        return False, {"backend": DB_BACKEND, "status": "unhealthy", "error": str(e)}
+
+
+def check_qdrant_health() -> tuple[bool, dict]:
+    """Verify Qdrant vector database accessibility."""
+    try:
+        if QDRANT_URL:
+            health_url = f"{QDRANT_URL.rstrip('/')}/healthz"
+            req = urllib.request.Request(health_url, headers={"User-Agent": "OrbitMesh-HealthCheck"})
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                if resp.status == 200:
+                    return True, {"mode": "server", "url": QDRANT_URL, "status": "connected"}
+                return False, {"mode": "server", "url": QDRANT_URL, "status": f"unexpected_status_{resp.status}"}
+        else:
+            if QDRANT_PATH.exists():
+                return True, {"mode": "embedded", "path": str(QDRANT_PATH), "status": "ready"}
+            return True, {"mode": "embedded", "path": str(QDRANT_PATH), "status": "uninitialized"}
+    except Exception as e:
+        logger.warning(f"Qdrant health check probe failed: {e}")
+        return False, {"mode": "server" if QDRANT_URL else "embedded", "status": "unhealthy", "error": str(e)}
+
+
 @app.get("/api/health")
 def health_check():
+    db_ok, db_info = check_database_health()
+    qdrant_ok, qdrant_info = check_qdrant_health()
+    overall = "ok" if (db_ok and qdrant_ok) else ("degraded" if db_ok else "unhealthy")
     return {
         "status": "ok",
+        "health": overall,
         "service": "orbitmesh-backend",
         "version": "0.0.1",
+        "dependencies": {
+            "database": db_info,
+            "vector_store": qdrant_info,
+        },
+    }
+
+
+@app.get("/api/health/live")
+def liveness_check():
+    """Liveness probe: verifies the process is running."""
+    return {"status": "alive"}
+
+
+@app.get("/api/health/ready")
+def readiness_check(response: Response):
+    """Readiness probe: verifies critical dependencies before accepting traffic."""
+    db_ok, db_info = check_database_health()
+    qdrant_ok, qdrant_info = check_qdrant_health()
+
+    if not db_ok or not qdrant_ok:
+        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+        return {
+            "status": "not_ready",
+            "dependencies": {
+                "database": db_info,
+                "vector_store": qdrant_info,
+            },
+        }
+
+    return {
+        "status": "ready",
+        "dependencies": {
+            "database": db_info,
+            "vector_store": qdrant_info,
+        },
     }
 
 

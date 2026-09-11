@@ -117,13 +117,13 @@ def health_check():
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-async def process_chat(request: ChatRequest, _: Optional[str] = Depends(verify_api_key)):
+def process_chat(request: ChatRequest, _: Optional[str] = Depends(verify_api_key)):
     session_id = request.session_id.strip() if request.session_id else None
     if not session_id:
         session_id = f"web-{uuid.uuid4().hex[:8]}"
 
     try:
-        envelope = await orchestrator.process_turn_async(session_id, request.message)
+        envelope = orchestrator.process_turn(session_id, request.message)
     except Exception as e:
         logger.error(f"Orchestrator processing failed for session '{session_id}': {e}", exc_info=True)
         raise HTTPException(

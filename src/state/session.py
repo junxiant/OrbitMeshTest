@@ -214,7 +214,7 @@ class SessionStateManager:
             latest.reported_issue = session.reported_issue or latest.reported_issue
             latest.is_escalated = session.is_escalated or latest.is_escalated
             latest.is_resolved = session.is_resolved or latest.is_resolved
-            latest.turns_count = max(latest.turns_count, session.turns_count) + 1
+            latest.turns_count = max(latest.turns_count + 1, session.turns_count)
             latest.updated_at = now
 
             try:
@@ -285,7 +285,8 @@ class SessionStateManager:
     @classmethod
     def update_session(cls, session: SessionState, check_version: bool = False) -> None:
         cls._init_db_once()
-        session.updated_at = time.time()
+        if session.updated_at is None:
+            session.updated_at = time.time()
         dialogue_json = json.dumps([msg.model_dump() for msg in session.dialogue_window])
         attempted_json = json.dumps(session.attempted_steps)
         confirmed_json = json.dumps(session.confirmed_facts)

@@ -17,7 +17,6 @@ _UNSET = object()
 
 class SessionConcurrencyError(RuntimeError):
     """Raised when an optimistic locking check detects a concurrent state conflict."""
-    pass
 
 
 # Session State Management: Supports PostgreSQL and SQLite

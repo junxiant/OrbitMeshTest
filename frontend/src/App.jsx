@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { sendMessage } from './api';
+import { sendMessage, streamMessage } from './api';
 import './App.css';
 
 function generateSessionId() {
@@ -186,52 +186,118 @@ export default function App() {
     setLoading(true);
     setError(null);
 
+    const assistantMsgId = 'assistant-' + Date.now();
+    let hasCreatedAssistantMessage = false;
+
     try {
-      const data = await sendMessage(activeSessionId, textToSend);
-
-      const assistantMessage = {
-        id: 'assistant-' + Date.now(),
-        sender: 'assistant',
-        text: data.response || 'No response returned.',
-        citations: data.citations || [],
-        action: data.action || 'instruct',
-        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      };
-
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id === activeSessionId) {
-            return {
-              ...s,
-              messages: [...s.messages, assistantMessage],
-            };
+      await streamMessage(activeSessionId, textToSend, {
+        onChunk: (delta, isReplace) => {
+          setLoading(false);
+          setSessions((prev) =>
+            prev.map((s) => {
+              if (s.id !== activeSessionId) return s;
+              if (!hasCreatedAssistantMessage) {
+                hasCreatedAssistantMessage = true;
+                const newMsg = {
+                  id: assistantMsgId,
+                  sender: 'assistant',
+                  text: delta,
+                  citations: [],
+                  action: null,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  isStreaming: true,
+                };
+                return { ...s, messages: [...s.messages, newMsg] };
+              }
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== assistantMsgId) return m;
+                  return {
+                    ...m,
+                    text: isReplace ? delta : m.text + delta,
+                  };
+                }),
+              };
+            })
+          );
+        },
+        onCitations: (citations) => {
+          setSessions((prev) =>
+            prev.map((s) => {
+              if (s.id !== activeSessionId) return s;
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== assistantMsgId) return m;
+                  return { ...m, citations: citations || [] };
+                }),
+              };
+            })
+          );
+        },
+        onDone: (doneData) => {
+          setLoading(false);
+          setSessions((prev) =>
+            prev.map((s) => {
+              if (s.id !== activeSessionId) return s;
+              if (!hasCreatedAssistantMessage) {
+                hasCreatedAssistantMessage = true;
+                const fallbackMsg = {
+                  id: assistantMsgId,
+                  sender: 'assistant',
+                  text: doneData.response || '',
+                  citations: [],
+                  action: doneData.action || 'instruct',
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                  isStreaming: false,
+                };
+                return { ...s, messages: [...s.messages, fallbackMsg] };
+              }
+              return {
+                ...s,
+                messages: s.messages.map((m) => {
+                  if (m.id !== assistantMsgId) return m;
+                  return {
+                    ...m,
+                    text: doneData.response || m.text,
+                    action: doneData.action || 'instruct',
+                    isStreaming: false,
+                  };
+                }),
+              };
+            })
+          );
+        },
+        onError: (err) => {
+          setError(err.message || 'Stream connection error');
+          setLoading(false);
+          if (!hasCreatedAssistantMessage) {
+            setSessions((prev) =>
+              prev.map((s) => {
+                if (s.id !== activeSessionId) return s;
+                return {
+                  ...s,
+                  messages: [
+                    ...s.messages,
+                    {
+                      id: 'error-' + Date.now(),
+                      sender: 'assistant',
+                      text: 'Error: Unable to connect to backend server. Ensure backend is running.',
+                      citations: [],
+                      action: 'error',
+                      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    },
+                  ],
+                };
+              })
+            );
           }
-          return s;
-        })
-      );
+        },
+      });
     } catch (err) {
       setError(err.message || 'Failed to send message');
-      setSessions((prev) =>
-        prev.map((s) => {
-          if (s.id === activeSessionId) {
-            return {
-              ...s,
-              messages: [
-                ...s.messages,
-                {
-                  id: 'error-' + Date.now(),
-                  sender: 'assistant',
-                  text: 'Error: Unable to connect to backend server. Ensure backend is running.',
-                  citations: [],
-                  action: 'error',
-                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-                },
-              ],
-            };
-          }
-          return s;
-        })
-      );
+      setLoading(false);
     } finally {
       setLoading(false);
     }
@@ -364,7 +430,10 @@ export default function App() {
                     <span className="message-time">{msg.timestamp}</span>
                   </div>
 
-                  <div className="message-content">{msg.text}</div>
+                  <div className="message-content">
+                    {msg.text}
+                    {msg.isStreaming && <span className="streaming-cursor" />}
+                  </div>
 
                   {msg.action && msg.sender === 'assistant' && (
                     <div className="message-action">

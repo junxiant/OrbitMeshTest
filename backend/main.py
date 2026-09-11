@@ -4,7 +4,9 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
+import json
 from fastapi import Depends, FastAPI, HTTPException, Security, status
+from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
@@ -115,13 +117,13 @@ def health_check():
 
 
 @app.post("/api/chat", response_model=ChatResponse)
-def process_chat(request: ChatRequest, _: Optional[str] = Depends(verify_api_key)):
+async def process_chat(request: ChatRequest, _: Optional[str] = Depends(verify_api_key)):
     session_id = request.session_id.strip() if request.session_id else None
     if not session_id:
         session_id = f"web-{uuid.uuid4().hex[:8]}"
 
     try:
-        envelope = orchestrator.process_turn(session_id, request.message)
+        envelope = await orchestrator.process_turn_async(session_id, request.message)
     except Exception as e:
         logger.error(f"Orchestrator processing failed for session '{session_id}': {e}", exc_info=True)
         raise HTTPException(
@@ -141,6 +143,34 @@ def process_chat(request: ChatRequest, _: Optional[str] = Depends(verify_api_key
         response=envelope.response,
         citations=citations,
         action=action_str,
+    )
+
+
+@app.post("/api/chat/stream")
+async def process_chat_stream(request: ChatRequest, _: Optional[str] = Depends(verify_api_key)):
+    session_id = request.session_id.strip() if request.session_id else None
+    if not session_id:
+        session_id = f"web-{uuid.uuid4().hex[:8]}"
+
+    async def event_generator():
+        try:
+            async for event_packet in orchestrator.process_turn_stream(session_id, request.message):
+                event_name = event_packet.get("event", "message")
+                data_payload = json.dumps(event_packet.get("data", {}))
+                yield f"event: {event_name}\ndata: {data_payload}\n\n"
+        except Exception as e:
+            logger.error(f"Stream generation failed for session '{session_id}': {e}", exc_info=True)
+            err_payload = json.dumps({"error": "Stream generation failed"})
+            yield f"event: error\ndata: {err_payload}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
     )
 
 

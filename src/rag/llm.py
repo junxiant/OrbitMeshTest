@@ -5,7 +5,9 @@ import re
 import threading
 import time
 
-from openai import OpenAI
+import asyncio
+from typing import AsyncIterator
+from openai import OpenAI, AsyncOpenAI
 from src.core.config import (
     OPENROUTER_API_KEY,
     OPENROUTER_FALLBACK_MODELS,
@@ -192,12 +194,68 @@ class MockLLM:
         )
 
 
+
+class StreamJsonExtractor:
+    """Progressively extracts the 'response' string from an LLM stream returning JSON."""
+    def __init__(self):
+        self.buffer = ""
+        self.in_response = False
+        self.done_response = False
+
+    def feed(self, chunk: str) -> str:
+        if self.done_response:
+            return ""
+        self.buffer += chunk
+        if not self.in_response:
+            match = re.search(r'"response"\s*:\s*"', self.buffer)
+            if match:
+                self.in_response = True
+                self.buffer = self.buffer[match.end():]
+            else:
+                return ""
+
+        out = []
+        i = 0
+        n = len(self.buffer)
+        while i < n:
+            c = self.buffer[i]
+            if c == "\\":
+                if i + 1 < n:
+                    nxt = self.buffer[i + 1]
+                    if nxt == "n":
+                        out.append("\n")
+                    elif nxt == '"':
+                        out.append('"')
+                    elif nxt == "\\":
+                        out.append("\\")
+                    elif nxt == "t":
+                        out.append("\t")
+                    elif nxt == "r":
+                        out.append("\r")
+                    else:
+                        out.append(nxt)
+                    i += 2
+                    continue
+                else:
+                    break
+            elif c == '"':
+                self.done_response = True
+                self.buffer = self.buffer[i + 1:]
+                break
+            else:
+                out.append(c)
+                i += 1
+
+        if not self.done_response:
+            self.buffer = self.buffer[i:]
+        return "".join(out)
+
 class LLMClient:
     def __init__(self):
         # "openrouter" is the legacy config name for live mode.
         self.mode = "live" if LLM_MODE == "openrouter" else LLM_MODE
         self.client: OpenAI | None = None
-        self._rate_limit_lock = threading.Lock()
+        self.async_client: AsyncOpenAI | None = None
         self.last_call_time = 0.0
         self.rate_limit_delay = LLM_RATE_LIMIT_DELAY
         self.fallback_models = OPENROUTER_FALLBACK_MODELS
@@ -217,7 +275,12 @@ class LLMClient:
                         base_url="https://openrouter.ai/api/v1",
                         timeout=self.request_timeout
                     )
-                    logger.info("Initialized OpenRouter LLM client.")
+                    self.async_client = AsyncOpenAI(
+                        api_key=OPENROUTER_API_KEY,
+                        base_url="https://openrouter.ai/api/v1",
+                        timeout=self.request_timeout
+                    )
+                    logger.info("Initialized OpenRouter sync and async clients.")
                 except Exception as e:
                     logger.error(
                         f"Failed to initialize OpenRouter client: {e}. "
@@ -305,18 +368,16 @@ Rules:
             logger.error("No OpenRouter client available for live call.")
             return None, ""
 
-        with self._rate_limit_lock:
-            elapsed = time.time() - self.last_call_time
-            if elapsed < self.rate_limit_delay:
-                sleep_duration = self.rate_limit_delay - elapsed
-                logger.debug(f"Rate limit buffer: sleeping for {sleep_duration:.2f}s before LLM call")
-                time.sleep(sleep_duration)
-            self.last_call_time = time.time()
+        elapsed = time.time() - self.last_call_time
+        if elapsed < self.rate_limit_delay:
+            sleep_duration = self.rate_limit_delay - elapsed
+            logger.debug(f"Rate limit buffer: sleeping for {sleep_duration:.2f}s before LLM call")
+            time.sleep(sleep_duration)
+        self.last_call_time = time.time()
 
         for model_candidate in self.fallback_models:
             try:
-                with self._rate_limit_lock:
-                    self.last_call_time = time.time()
+                self.last_call_time = time.time()
                 resp = self.client.chat.completions.create(
                     model=model_candidate,
                     messages=messages,
@@ -382,3 +443,187 @@ Rules:
         if self.mode == "record":
             replay.save_fixture(messages, envelope, model_id)
         return envelope
+
+    async def _call_with_fallback_async(self, messages: list[dict[str, str]]) -> tuple[ResponseEnvelope | None, str]:
+        if self.async_client is None:
+            logger.error("No AsyncOpenAI client available for live call.")
+            return None, ""
+
+        elapsed = time.time() - self.last_call_time
+        if elapsed < self.rate_limit_delay:
+            await asyncio.sleep(self.rate_limit_delay - elapsed)
+        self.last_call_time = time.time()
+
+        for model_candidate in self.fallback_models:
+            try:
+                self.last_call_time = time.time()
+                resp = await self.async_client.chat.completions.create(
+                    model=model_candidate,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                    max_tokens=self.max_tokens,
+                    timeout=self.request_timeout
+                )
+                if not resp.choices or len(resp.choices) == 0:
+                    continue
+                raw_text = resp.choices[0].message.content or ""
+                if not raw_text.strip():
+                    continue
+                data = self._parse_llm_response(raw_text)
+                if not data:
+                    continue
+                citations = [Citation(**c) for c in data.get("citations", []) if isinstance(c, dict)]
+                action_raw = data.get("action")
+                try:
+                    action = ActionEnum(action_raw)
+                except (ValueError, TypeError, KeyError):
+                    action = ActionEnum.ASK
+                envelope = ResponseEnvelope(
+                    response=str(data.get("response", raw_text.strip())),
+                    citations=citations,
+                    action=action
+                )
+                return envelope, model_candidate
+            except Exception as e:
+                logger.warning(f"Async model candidate '{model_candidate}' failed ({e}). Trying next fallback...")
+                await asyncio.sleep(0.5)
+        return None, ""
+
+    async def _call_stream_with_fallback(
+        self, messages: list[dict[str, str]]
+    ) -> AsyncIterator[tuple[str, ResponseEnvelope | None]]:
+        if self.async_client is None:
+            logger.error("No AsyncOpenAI client available for live streaming call.")
+            yield "", None
+            return
+
+        for model_candidate in self.fallback_models:
+            elapsed = time.time() - self.last_call_time
+            if elapsed < self.rate_limit_delay:
+                await asyncio.sleep(self.rate_limit_delay - elapsed)
+            self.last_call_time = time.time()
+
+            try:
+                stream = await self.async_client.chat.completions.create(
+                    model=model_candidate,
+                    messages=messages,
+                    response_format={"type": "json_object"},
+                    temperature=0.0,
+                    max_tokens=self.max_tokens,
+                    timeout=self.request_timeout,
+                    stream=True
+                )
+                extractor = StreamJsonExtractor()
+                full_raw_text = []
+                yielded_any = False
+
+                async for chunk in stream:
+                    if not chunk.choices or len(chunk.choices) == 0:
+                        continue
+                    delta = chunk.choices[0].delta.content or ""
+                    if not delta:
+                        continue
+                    full_raw_text.append(delta)
+                    token = extractor.feed(delta)
+                    if token:
+                        yielded_any = True
+                        yield token, None
+
+                raw_text = "".join(full_raw_text).strip()
+                if not raw_text:
+                    if not yielded_any:
+                        logger.warning(f"Empty stream from model candidate '{model_candidate}'. Trying next...")
+                        continue
+                    break
+
+                data = self._parse_llm_response(raw_text)
+                citations = []
+                action = ActionEnum.INSTRUCT
+                resp_text = raw_text
+                if data:
+                    citations = [Citation(**c) for c in data.get("citations", []) if isinstance(c, dict)]
+                    action_raw = data.get("action")
+                    try:
+                        action = ActionEnum(action_raw)
+                    except (ValueError, TypeError, KeyError):
+                        action = ActionEnum.ASK
+                    resp_text = str(data.get("response", raw_text))
+
+                if not yielded_any and resp_text:
+                    yield resp_text, None
+
+                envelope = ResponseEnvelope(
+                    response=resp_text,
+                    citations=citations,
+                    action=action
+                )
+                yield "", envelope
+                return
+            except Exception as e:
+                logger.warning(f"Streaming model candidate '{model_candidate}' failed ({e}). Trying next...")
+                await asyncio.sleep(0.5)
+
+        yield "", None
+
+    async def complete_async(
+        self,
+        user_message: str,
+        session: SessionState,
+        retrieved_chunks: list[DocumentChunk]
+    ) -> ResponseEnvelope:
+        if self.mode == "mock":
+            return MockLLM.generate_response(user_message, session, retrieved_chunks)
+
+        messages = self._build_messages(user_message, session, retrieved_chunks)
+
+        if self.mode == "replay":
+            return replay.load_fixture(messages)
+
+        envelope, model_id = await self._call_with_fallback_async(messages)
+        if envelope is None:
+            logger.error("All model candidates failed asynchronously. Returning escalation envelope.")
+            return build_escalation_envelope()
+
+        if self.mode == "record":
+            replay.save_fixture(messages, envelope, model_id)
+        return envelope
+
+    async def complete_stream(
+        self,
+        user_message: str,
+        session: SessionState,
+        retrieved_chunks: list[DocumentChunk]
+    ) -> AsyncIterator[tuple[str, ResponseEnvelope | None]]:
+        if self.mode == "mock":
+            full_env = MockLLM.generate_response(user_message, session, retrieved_chunks)
+            words = full_env.response.split(" ")
+            for i, word in enumerate(words):
+                suffix = " " if i < len(words) - 1 else ""
+                yield word + suffix, None
+                await asyncio.sleep(0.01)
+            yield "", full_env
+            return
+
+        messages = self._build_messages(user_message, session, retrieved_chunks)
+
+        if self.mode == "replay":
+            env = replay.load_fixture(messages)
+            yield "", env
+            return
+
+        final_env: ResponseEnvelope | None = None
+        async for delta, env in self._call_stream_with_fallback(messages):
+            if delta:
+                yield delta, None
+            if env:
+                final_env = env
+
+        if final_env is None:
+            logger.error("All streaming model candidates failed. Returning escalation envelope.")
+            final_env = build_escalation_envelope()
+
+        if self.mode == "record":
+            replay.save_fixture(messages, final_env, "streamed")
+
+        yield "", final_env

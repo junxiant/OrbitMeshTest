@@ -1,5 +1,24 @@
 # Changelog
 
+## [2026-09-11]
+
+### Changed
+- **Asynchronous LLM Client & Non-Blocking Scheduling (`src/rag/llm.py`)**:
+  - Removed in-process `threading.Lock()` and blocking `time.sleep()` in `LLMClient` to eliminate request serialization bottleneck across worker threads.
+  - Added `AsyncOpenAI` client for non-blocking asynchronous model invocations.
+  - Added `StreamJsonExtractor` state machine to parse and extract JSON response text deltas progressively in real time.
+  - Added `complete_async()` and `complete_stream()` methods with non-blocking rate limiting and async fallback cascades.
+- **Asynchronous Orchestrator Turn Pipeline (`src/agent/orchestrator.py`)**:
+  - Added `process_turn_async` running CPU/IO retrieval non-blockingly via `asyncio.to_thread`.
+  - Added `process_turn_stream` async generator emitting structured SSE events (`start`, `delta`, `replace`, `citations`, `done`) with safety guardrail evaluation and post-stream citation validation.
+- **Server-Sent Events (SSE) Streaming API (`backend/main.py`)**:
+  - Added `POST /api/chat/stream` endpoint returning `StreamingResponse(..., media_type="text/event-stream")`.
+  - Converted `POST /api/chat` to `async def` maintaining backward compatibility for non-streaming clients.
+- **Frontend Real-Time Token Streaming (`frontend/src/api.js`, `frontend/src/App.jsx`, `frontend/src/App.css`)**:
+  - Added `streamMessage` using `ReadableStreamDefaultReader` to consume and decode SSE packets.
+  - Updated chat UI to render incoming assistant tokens progressively with an animated cursor indicator.
+
+
 ## [2026-09-04]
 
 ### Fixed

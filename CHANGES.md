@@ -24,6 +24,12 @@
   - Added `streamMessage` using `ReadableStreamDefaultReader` supporting CRLF/LF packet parsing and trailing buffer flushes.
   - Fixed React 18 state batching race in `App.jsx` using atomic message existence checks.
   - Added real-time pipeline status telemetry (`Searching OrbitMesh documentation...` -> `Generating diagnostic response...`) with an animated 3-dot pulse indicator and streaming cursor.
+- **Session State Optimistic Concurrency & Cleanup (`src/core/models.py`, `src/state/session.py`, `tests/test_session_state.py`)**:
+  - Added `version INTEGER DEFAULT 1` column and `idx_sessions_updated_at` index to PostgreSQL and SQLite `sessions` tables with automatic schema migration.
+  - Implemented optimistic locking conditional updates in `SessionStateManager.update_session` and `record_turn` to detect concurrent write collisions.
+  - Added collision retry loop with backoff and fresh dialogue merging in `record_turn` to eliminate lost update anomalies.
+  - Added `delete_expired_sessions(ttl_days=30)` as a utility method for manual session retention cleanup (not automatically scheduled).
+  - Added test coverage for collision detection, parallel turn merging, and TTL cleanup in `tests/test_session_state.py`.
 
 
 ## [2026-09-04]

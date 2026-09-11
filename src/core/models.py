@@ -70,6 +70,7 @@ class SessionState(BaseModel):
     turns_count: int = 0
     is_escalated: bool = False
     is_resolved: bool = False
+    version: int = 1
 
     @property
     def history(self) -> List[Dict[str, str]]:
